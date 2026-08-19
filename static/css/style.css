@@ -1,0 +1,33 @@
+/* Custom Stylesheet */
+
+body {
+    font-family: 'Inter', sans-serif;
+}
+
+.glass-panel {
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+.drag-active {
+    border-color: #4f46e5 !important;
+    background-color: #e0e7ff !important;
+}
+
+/* Animations that give a dynamic feel */
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.slide-down-anim {
+    animation: slideDown 0.5s ease forwards;
+}
