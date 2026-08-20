@@ -1,6 +1,6 @@
 """
 Storage abstraction layer untuk mendukung berbagai backend penyimpanan.
-Saat ini support: LocalStorage (folder), GoogleDriveStorage (Google Drive)
+Support: LocalStorage, GoogleDriveStorage, SupabaseStorage
 """
 
 from abc import ABC, abstractmethod
@@ -104,6 +104,102 @@ class LocalStorage(StorageBackend):
         """Buat folder di filesystem."""
         full_path = self._get_full_path(folder_path)
         os.makedirs(full_path, exist_ok=True)
+        return folder_path
+
+
+class SupabaseStorage(StorageBackend):
+    """Storage menggunakan Supabase (PostgreSQL + Storage bucket)."""
+    
+    def __init__(self, supabase_url: str, supabase_key: str, bucket_name: str = 'twibbon-files'):
+        """
+        Inisialisasi Supabase storage.
+        
+        Args:
+            supabase_url: URL Supabase project (https://xxx.supabase.co)
+            supabase_key: API key Supabase
+            bucket_name: Nama bucket di Supabase Storage
+        """
+        try:
+            from supabase import create_client, Client
+        except ImportError:
+            raise ImportError(
+                "Supabase dependencies tidak terinstall. "
+                "Install dengan: pip install supabase"
+            )
+        
+        self.supabase_url = supabase_url
+        self.supabase_key = supabase_key
+        self.bucket_name = bucket_name
+        
+        # Initialize Supabase client
+        self.client: 'Client' = create_client(supabase_url, supabase_key)
+    
+    def save_file(self, file_path: str, file_content: BinaryIO) -> str:
+        """Simpan file ke Supabase Storage."""
+        try:
+            file_data = file_content.read()
+            
+            # Upload ke bucket
+            response = self.client.storage.from_(self.bucket_name).upload(
+                file_path,
+                file_data,
+                file_options={"upsert": "true"}
+            )
+            
+            return file_path
+        except Exception as e:
+            print(f"Error saving file to Supabase: {e}")
+            raise
+    
+    def get_file(self, file_path: str) -> BinaryIO:
+        """Ambil file dari Supabase Storage."""
+        try:
+            response = self.client.storage.from_(self.bucket_name).download(file_path)
+            return io.BytesIO(response)
+        except Exception as e:
+            print(f"Error getting file from Supabase: {e}")
+            raise FileNotFoundError(f"File not found: {file_path}")
+    
+    def file_exists(self, file_path: str) -> bool:
+        """Cek apakah file ada di Supabase."""
+        try:
+            # List files di folder
+            file_name = file_path.split('/')[-1]
+            folder_path = '/'.join(file_path.split('/')[:-1]) if '/' in file_path else ''
+            
+            response = self.client.storage.from_(self.bucket_name).list(folder_path)
+            
+            if response:
+                for file in response:
+                    if file['name'] == file_name:
+                        return True
+            return False
+        except Exception:
+            return False
+    
+    def delete_file(self, file_path: str) -> bool:
+        """Hapus file dari Supabase."""
+        try:
+            self.client.storage.from_(self.bucket_name).remove([file_path])
+            return True
+        except Exception as e:
+            print(f"Error deleting file from Supabase: {e}")
+            return False
+    
+    def get_download_url(self, file_path: str) -> str:
+        """Dapatkan public URL untuk download file dari Supabase."""
+        try:
+            url = self.client.storage.from_(self.bucket_name).get_public_url(file_path)
+            return url
+        except Exception as e:
+            print(f"Error getting download URL: {e}")
+            return None
+    
+    def create_folder(self, folder_path: str) -> str:
+        """
+        Buat folder di Supabase (sebenarnya hanya membuat path kosong).
+        Supabase tidak memerlukan folder creation eksplisit.
+        """
         return folder_path
 
 
@@ -386,7 +482,7 @@ def create_storage(backend: str = 'local', **kwargs) -> StorageBackend:
     Factory untuk membuat storage backend.
     
     Args:
-        backend: 'local' atau 'google_drive'
+        backend: 'local', 'google_drive', atau 'supabase'
         **kwargs: argumen untuk backend
     
     Returns:
@@ -395,10 +491,16 @@ def create_storage(backend: str = 'local', **kwargs) -> StorageBackend:
     Contoh:
         storage = create_storage('local', base_path='uploads')
         storage = create_storage('google_drive', credentials_file='credentials.json')
+        storage = create_storage('supabase', 
+            supabase_url='https://xxx.supabase.co',
+            supabase_key='your_key',
+            bucket_name='twibbon-files')
     """
     if backend == 'local':
         return LocalStorage(**kwargs)
     elif backend == 'google_drive':
         return GoogleDriveStorage(**kwargs)
+    elif backend == 'supabase':
+        return SupabaseStorage(**kwargs)
     else:
         raise ValueError(f"Unknown backend: {backend}")
