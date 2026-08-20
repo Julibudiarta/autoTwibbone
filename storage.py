@@ -54,7 +54,6 @@ class LocalStorage(StorageBackend):
     def _get_full_path(self, file_path: str) -> str:
         """Konversi path ke full path."""
         full_path = os.path.join(self.base_path, file_path)
-        # Keamanan: pastikan path tidak keluar dari base_path
         full_path = os.path.abspath(full_path)
         if not full_path.startswith(os.path.abspath(self.base_path)):
             raise ValueError(f"Path traversal detected: {file_path}")
@@ -119,12 +118,11 @@ class GoogleDriveStorage(StorageBackend):
         
         Args:
             credentials_file: Path ke credentials.json dari Google Cloud Console
-            token_file: Path untuk menyimpan token akses (akan dibuat otomatis)
+            token_file: Path untuk menyimpan token akses
             root_folder_id: ID folder di Google Drive untuk menyimpan data
         """
         try:
             from google.auth.transport.requests import Request
-            from google.oauth2.service_account import Credentials
             from google_auth_oauthlib.flow import InstalledAppFlow
             from google.auth.exceptions import RefreshError
             import pickle
@@ -141,7 +139,6 @@ class GoogleDriveStorage(StorageBackend):
         self.root_folder_id = root_folder_id
         self.SCOPES = ['https://www.googleapis.com/auth/drive']
         
-        # Import di sini untuk menghindari dependency jika tidak pakai Google Drive
         self.Request = Request
         self.InstalledAppFlow = InstalledAppFlow
         self.pickle = pickle
@@ -151,18 +148,16 @@ class GoogleDriveStorage(StorageBackend):
         self.MediaIoBaseDownload = MediaIoBaseDownload
         
         self.service = self._authenticate()
-        self._folder_cache = {}  # Cache untuk folder IDs
+        self._folder_cache = {}
     
     def _authenticate(self):
         """Autentikasi dengan Google Drive API."""
         creds = None
         
-        # Load token yang tersimpan sebelumnya
         if os.path.exists(self.token_file):
             with open(self.token_file, 'rb') as token:
                 creds = self.pickle.load(token)
         
-        # Jika tidak ada creds yang valid, autentikasi ulang
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 try:
@@ -174,26 +169,20 @@ class GoogleDriveStorage(StorageBackend):
                 if not os.path.exists(self.credentials_file):
                     raise FileNotFoundError(
                         f"Credentials file not found: {self.credentials_file}\n"
-                        "Ambil dari Google Cloud Console: "
-                        "https://console.cloud.google.com/apis/credentials"
+                        "Ambil dari: https://console.cloud.google.com/apis/credentials"
                     )
                 
                 flow = self.InstalledAppFlow.from_client_secrets_file(
                     self.credentials_file, self.SCOPES)
                 creds = flow.run_local_server(port=0)
             
-            # Simpan credentials untuk penggunaan berikutnya
             with open(self.token_file, 'wb') as token:
                 self.pickle.dump(creds, token)
         
         return self.build('drive', 'v3', credentials=creds)
     
     def _get_or_create_folder(self, folder_path: str) -> str:
-        """
-        Dapatkan atau buat folder nested di Google Drive.
-        Return folder ID dari folder terakhir di path.
-        """
-        # Check cache dulu
+        """Dapatkan atau buat folder nested di Google Drive."""
         if folder_path in self._folder_cache:
             return self._folder_cache[folder_path]
         
@@ -207,12 +196,10 @@ class GoogleDriveStorage(StorageBackend):
             
             current_path = f"{current_path}/{part}" if current_path else part
             
-            # Check cache
             if current_path in self._folder_cache:
                 current_parent_id = self._folder_cache[current_path]
                 continue
             
-            # Cari folder di Google Drive
             query = (f"name='{part}' and mimeType='application/vnd.google-apps.folder' "
                     f"and '{current_parent_id}' in parents and trashed=false")
             results = self.service.files().list(
@@ -224,7 +211,6 @@ class GoogleDriveStorage(StorageBackend):
             if files:
                 current_parent_id = files[0]['id']
             else:
-                # Buat folder baru jika tidak ada
                 file_metadata = {
                     'name': part,
                     'mimeType': 'application/vnd.google-apps.folder',
@@ -255,22 +241,18 @@ class GoogleDriveStorage(StorageBackend):
             filename = file_path
             parent_id = self.root_folder_id
         
-        # Cek apakah file sudah ada
         query = f"name='{filename}' and '{parent_id}' in parents and trashed=false"
         results = self.service.files().list(
             q=query, spaces='drive', fields='files(id)', pageSize=1
         ).execute()
         
         files = results.get('files', [])
-        
-        # Reset file pointer ke awal
         file_content.seek(0)
         
         file_metadata = {'name': filename, 'parents': [parent_id]}
-        media = self.MediaIoBaseDownload(file_content, mimetype='application/octet-stream')
+        media = self.MediaFileUpload(file_content, mimetype='application/octet-stream')
         
         if files:
-            # Update file yang sudah ada
             file_id = files[0]['id']
             self.service.files().update(
                 fileId=file_id,
@@ -278,7 +260,6 @@ class GoogleDriveStorage(StorageBackend):
                 media_body=media
             ).execute()
         else:
-            # Upload file baru
             self.service.files().create(
                 body=file_metadata,
                 media_body=media,
@@ -298,7 +279,6 @@ class GoogleDriveStorage(StorageBackend):
             filename = file_path
             parent_id = self.root_folder_id
         
-        # Cari file
         query = f"name='{filename}' and '{parent_id}' in parents and trashed=false"
         results = self.service.files().list(
             q=query, spaces='drive', fields='files(id)', pageSize=1
@@ -390,26 +370,24 @@ class GoogleDriveStorage(StorageBackend):
         
         file_id = files[0]['id']
         
-        # Buat shared link
         try:
             self.service.permissions().create(
                 fileId=file_id,
                 body={'role': 'reader', 'type': 'anyone'}
             ).execute()
         except:
-            pass  # Sudah public atau error lainnya
+            pass
         
         return f"https://drive.google.com/uc?export=download&id={file_id}"
 
 
-# Factory function untuk membuat storage backend
 def create_storage(backend: str = 'local', **kwargs) -> StorageBackend:
     """
     Factory untuk membuat storage backend.
     
     Args:
         backend: 'local' atau 'google_drive'
-        **kwargs: argumen untuk backend (lihat class init)
+        **kwargs: argumen untuk backend
     
     Returns:
         StorageBackend instance
