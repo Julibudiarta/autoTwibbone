@@ -4,63 +4,232 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Auto-Twibbon Studio</title>
-    
+
     <!-- Meta SEO -->
     <meta name="description" content="Aplikasi pembuat Twibbon massal. Unggah Twibbon Anda dan banyak foto pengguna sekaligus secara otomatis.">
-    
+
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    
-    <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    
-    <!-- Custom CSS -->
+
+    <!-- Google Fonts: Fraunces (display, festive serif) + Inter (body) + JetBrains Mono (tags/counters) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;0,9..144,800;1,9..144,600&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+
+    <!-- Project stylesheet (kept in case it holds extra rules) -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+
+    <style>
+        :root{
+            --plum:      #241233;
+            --plum-deep: #170a22;
+            --paper:     #FFFDF6;
+            --paper-dim: #F3EEE1;
+            --marigold:  #FDB833;
+            --coral:     #FF5B4C;
+            --ink:       #241233;
+            --ink-muted: #6E6280;
+            --thread:    #C9BEDD;
+        }
+
+        * { -webkit-font-smoothing: antialiased; }
+
+        body{
+            font-family:'Inter', sans-serif;
+            background:
+                radial-gradient(circle at 12% 8%, rgba(253,184,51,0.16), transparent 40%),
+                radial-gradient(circle at 88% 18%, rgba(255,91,76,0.14), transparent 42%),
+                radial-gradient(circle at 50% 100%, rgba(201,190,221,0.12), transparent 55%),
+                var(--plum-deep);
+            color: var(--paper);
+        }
+
+        .font-display{ font-family:'Fraunces', serif; }
+        .font-mono{ font-family:'JetBrains Mono', monospace; letter-spacing: 0.02em; }
+
+        /* --- Confetti dots scattered on the dark backdrop --- */
+        .confetti-field{ position:absolute; inset:0; overflow:hidden; pointer-events:none; z-index:0; }
+        .confetti-field span{
+            position:absolute; border-radius:2px; opacity:0.55;
+            animation: drift 9s ease-in-out infinite;
+        }
+        @keyframes drift{
+            0%,100%{ transform: translateY(0) rotate(0deg); }
+            50%{ transform: translateY(-14px) rotate(12deg); }
+        }
+
+        /* --- Sticker badge (rotated tag near the headline) --- */
+        .sticker{
+            display:inline-flex; align-items:center; gap:.5rem;
+            background: var(--coral); color: var(--paper);
+            font-family:'JetBrains Mono', monospace; font-size:.7rem; font-weight:600;
+            letter-spacing:.12em; text-transform:uppercase;
+            padding:.4rem .9rem; border-radius:999px;
+            transform: rotate(-3deg);
+            box-shadow: 0 6px 16px rgba(255,91,76,0.35);
+        }
+
+        /* --- The main card: like a piece of photo paper pinned to the board --- */
+        .studio-card{
+            background: var(--paper);
+            border-radius: 28px;
+            box-shadow:
+                0 1px 0 rgba(255,255,255,0.5) inset,
+                0 30px 60px -20px rgba(10,4,20,0.55);
+            position: relative;
+        }
+        .studio-card::before{
+            /* washi tape at the top */
+            content:"";
+            position:absolute; top:-16px; left:50%; transform:translateX(-50%) rotate(-2deg);
+            width:120px; height:34px;
+            background: repeating-linear-gradient(45deg, var(--marigold), var(--marigold) 6px, #ffcb5f 6px, #ffcb5f 12px);
+            opacity:0.9; border-radius:3px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.25);
+        }
+
+        /* --- Frame-corner brackets: the signature motif, echoing a twibbon frame --- */
+        .frame-corners{ position:relative; }
+        .frame-corners::before,
+        .frame-corners::after,
+        .frame-corners .corner-br,
+        .frame-corners .corner-bl{
+            content:""; position:absolute; width:22px; height:22px;
+            border-color: var(--coral); transition: border-color .25s ease, transform .25s ease;
+            pointer-events:none;
+        }
+        .frame-corners::before{ top:10px; left:10px; border-top:3px solid; border-left:3px solid; border-radius: 6px 0 0 0; }
+        .frame-corners::after{ top:10px; right:10px; border-top:3px solid; border-right:3px solid; border-radius: 0 6px 0 0; }
+        .frame-corners .corner-bl{ bottom:10px; left:10px; border-bottom:3px solid; border-left:3px solid; border-radius: 0 0 0 6px; }
+        .frame-corners .corner-br{ bottom:10px; right:10px; border-bottom:3px solid; border-right:3px solid; border-radius: 0 0 6px 0; }
+        .frame-corners:hover::before,
+        .frame-corners:hover::after,
+        .frame-corners:hover .corner-bl,
+        .frame-corners:hover .corner-br{ border-color: var(--marigold); }
+
+        .dropzone{
+            background: var(--paper-dim);
+            border: 2px dashed #D9CEB8;
+            transition: background .2s ease, border-color .2s ease, transform .15s ease;
+        }
+        .dropzone:hover{ background:#EFE7D2; border-color:#C9BE9E; }
+        .dropzone:focus-within{ outline: 3px solid var(--marigold); outline-offset:2px; }
+        .dropzone.drag-over,
+        .dropzone.border-blue-500{
+            border-color: var(--coral) !important;
+            background: #FCEFE0 !important;
+            transform: scale(1.01);
+        }
+
+        .step-badge{
+            font-family:'JetBrains Mono', monospace; font-weight:600; font-size:.85rem;
+            width:28px; height:28px; border-radius:9px;
+            display:inline-flex; align-items:center; justify-content:center;
+            background: var(--plum); color: var(--marigold);
+            flex-shrink:0;
+        }
+
+        .btn-primary{
+            background: linear-gradient(135deg, var(--coral), #FF7A4C);
+            box-shadow: 0 12px 28px -8px rgba(255,91,76,0.55);
+            transition: transform .18s ease, box-shadow .18s ease, filter .18s ease;
+        }
+        .btn-primary:hover{ transform: translateY(-2px); box-shadow: 0 16px 34px -8px rgba(255,91,76,0.65); filter:brightness(1.03); }
+        .btn-primary:active{ transform: translateY(0); }
+        .btn-primary:focus-visible{ outline:3px solid var(--marigold); outline-offset:3px; }
+        .btn-primary:disabled{ opacity:.6; cursor:not-allowed; transform:none; }
+
+        .result-card{
+            background: var(--paper);
+            border-radius: 18px;
+            box-shadow: 0 12px 30px -12px rgba(10,4,20,0.35);
+            transition: transform .2s ease, box-shadow .2s ease;
+        }
+        .result-card:hover{ transform: translateY(-4px) rotate(-0.4deg); box-shadow: 0 18px 36px -12px rgba(10,4,20,0.45); }
+
+        /* --- History slide-over --- */
+        #historyPanel{ transition: transform .3s ease; }
+
+        /* --- Position editor --- */
+        #editorStage{ touch-action:none; }
+        #editorStage.cursor-grabbing{ cursor:grabbing; }
+        #editorPhoto{ transition: transform .05s linear; }
+
+        @media (prefers-reduced-motion: reduce){
+            .confetti-field span{ animation: none; }
+            .result-card, .btn-primary, .dropzone{ transition: none; }
+        }
+    </style>
 </head>
-<body class="bg-gradient-to-br from-indigo-50 to-blue-100 min-h-screen antialiased text-gray-800 font-inter">
+<body class="min-h-screen antialiased relative">
+
+    <!-- Ambient confetti (decorative, aria-hidden) -->
+    <div class="confetti-field" aria-hidden="true">
+        <span style="top:8%; left:6%; width:10px; height:10px; background:var(--marigold); animation-delay:0s;"></span>
+        <span style="top:20%; left:88%; width:14px; height:14px; background:var(--coral); border-radius:50%; animation-delay:1.2s;"></span>
+        <span style="top:65%; left:4%; width:8px; height:8px; background:var(--thread); animation-delay:2.1s;"></span>
+        <span style="top:40%; left:94%; width:10px; height:10px; background:var(--marigold); border-radius:50%; animation-delay:.6s;"></span>
+        <span style="top:82%; left:80%; width:12px; height:12px; background:var(--coral); animation-delay:1.8s;"></span>
+        <span style="top:12%; left:45%; width:6px; height:6px; background:var(--thread); border-radius:50%; animation-delay:2.6s;"></span>
+    </div>
+
+    <!-- History toggle -->
+    <button id="historyToggleBtn" type="button"
+        class="fixed top-4 right-4 md:top-6 md:right-6 z-30 flex items-center gap-2 font-mono text-xs font-semibold px-4 py-2.5 rounded-full shadow-lg"
+        style="background:var(--paper); color:var(--plum);">
+        🕓 Riwayat Saya
+    </button>
 
     <!-- Header Section -->
-    <header class="w-full text-center py-10">
-        <h1 class="text-4xl md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600 mb-4">
-            Auto-Twibbon Studio
+    <header class="relative z-10 w-full text-center pt-14 pb-10 px-4">
+        <span class="sticker mb-5">Gratis · Otomatis · Massal</span>
+        <h1 class="font-display text-4xl md:text-6xl font-bold mt-5 mb-4 leading-tight">
+            Auto-<span class="italic font-semibold" style="color:var(--marigold)">Twibbon</span> Studio
         </h1>
-        <p class="text-gray-500 max-w-2xl mx-auto px-4 text-lg">
-            Unggah bingkai transparan (Twibbon) Anda bersama kumpulan foto. Sistem kami akan menggabungkannya secara otomatis dan instan!
+        <p class="max-w-xl mx-auto text-base md:text-lg" style="color:var(--thread)">
+            Unggah satu bingkai, jatuhkan banyak foto — kami rapikan semuanya jadi Twibbon sekaligus, dalam hitungan detik.
         </p>
     </header>
 
     <!-- Main Container -->
-    <main class="max-w-4xl mx-auto px-4 pb-16">
-        <form id="uploadForm" class="glass-panel rounded-2xl shadow-xl p-8 mb-10">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-                
+    <main class="relative z-10 max-w-4xl mx-auto px-4 pb-20">
+        <form id="uploadForm" class="studio-card p-6 md:p-10 mb-10">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8 mb-8">
+
                 <!-- Twibbon Area -->
                 <div class="flex flex-col">
-                    <label class="text-lg font-semibold text-gray-700 mb-2">1. Pilih Twibbon (Format PNG)</label>
-                    <div id="drop-twibbon" class="relative border-2 border-dashed border-gray-300 rounded-xl bg-gray-50 hover:bg-gray-100 transition duration-300 flex flex-col items-center justify-center p-6 text-center cursor-pointer h-64">
+                    <label class="flex items-center gap-2 text-base font-semibold mb-3" style="color:var(--ink)">
+                        <span class="step-badge">1</span>
+                        Pilih Twibbon (PNG)
+                    </label>
+                    <div id="drop-twibbon" class="dropzone frame-corners relative rounded-2xl flex flex-col items-center justify-center p-6 text-center cursor-pointer h-60 md:h-64">
+                        <span class="corner-bl"></span><span class="corner-br"></span>
                         <input type="file" id="twibbonFile" name="twibbon" accept="image/png" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10">
-                        <svg class="w-12 h-12 text-blue-500 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
-                        <p class="text-gray-600 font-medium z-0">Tarik & lepas file PNG</p>
-                        <p class="text-sm text-gray-400 mt-1 z-0">atau klik untuk menelusuri</p>
-                        <div id="twibbon-preview" class="hidden absolute inset-0 w-full h-full p-2 bg-gray-50 rounded-xl z-20 flex flex-col justify-center items-center">
-                            <span id="twibbon-name" class="font-semibold text-sm text-indigo-700 mb-2 break-all text-center"></span>
-                            <button type="button" id="clear-twibbon" class="text-xs bg-red-100 text-red-600 px-3 py-1 rounded-full hover:bg-red-200">Ganti</button>
+                        <svg class="w-11 h-11 mb-3" style="color:var(--coral)" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                        <p class="font-semibold z-0" style="color:var(--ink)">Tarik &amp; lepas file PNG</p>
+                        <p class="text-sm mt-1 z-0" style="color:var(--ink-muted)">atau klik untuk menelusuri</p>
+                        <div id="twibbon-preview" class="hidden absolute inset-0 w-full h-full p-3 rounded-2xl z-20 flex flex-col justify-center items-center" style="background:var(--paper-dim)">
+                            <span id="twibbon-name" class="font-mono text-xs font-semibold mb-3 break-all text-center px-2" style="color:var(--plum)"></span>
+                            <button type="button" id="clear-twibbon" class="text-xs font-semibold px-4 py-1.5 rounded-full transition" style="background:#FCE4DF; color:var(--coral)">Ganti File</button>
                         </div>
                     </div>
                 </div>
 
                 <!-- User Photos Area -->
                 <div class="flex flex-col">
-                    <label class="text-lg font-semibold text-gray-700 mb-2">2. Pilih Banyak Foto</label>
-                    <div id="drop-photos" class="relative border-2 border-dashed border-gray-300 rounded-xl bg-gray-50 hover:bg-gray-100 transition duration-300 flex flex-col items-center justify-center p-6 text-center cursor-pointer h-64">
+                    <label class="flex items-center gap-2 text-base font-semibold mb-3" style="color:var(--ink)">
+                        <span class="step-badge">2</span>
+                        Pilih Banyak Foto
+                    </label>
+                    <div id="drop-photos" class="dropzone frame-corners relative rounded-2xl flex flex-col items-center justify-center p-6 text-center cursor-pointer h-60 md:h-64">
+                        <span class="corner-bl"></span><span class="corner-br"></span>
                         <!-- multiple keyword is essential -->
                         <input type="file" id="userFiles" name="user_images" accept="image/png, image/jpeg, image/jpg, image/heic, image/heif" multiple class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10">
-                        <svg class="w-12 h-12 text-indigo-500 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                        <p class="text-gray-600 font-medium z-0">Tarik kumpulan foto kesini</p>
-                        <p class="text-sm text-gray-400 mt-1 z-0">Bisa memilih banyak foto sekaligus</p>
-                        <div id="photos-preview" class="hidden absolute inset-0 w-full h-full p-2 bg-gray-50 rounded-xl z-20 flex flex-col justify-center items-center">
-                            <span id="photos-count" class="font-semibold text-xl text-indigo-700 mb-2"></span>
-                            <button type="button" id="clear-photos" class="text-xs bg-red-100 text-red-600 px-3 py-1 rounded-full hover:bg-red-200">Reset Semua Foto</button>
+                        <svg class="w-11 h-11 mb-3" style="color:var(--marigold)" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                        <p class="font-semibold z-0" style="color:var(--ink)">Tarik kumpulan foto ke sini</p>
+                        <p class="text-sm mt-1 z-0" style="color:var(--ink-muted)">Bisa memilih banyak foto sekaligus</p>
+                        <div id="photos-preview" class="hidden absolute inset-0 w-full h-full p-3 rounded-2xl z-20 flex flex-col justify-center items-center" style="background:var(--paper-dim)">
+                            <span id="photos-count" class="font-display font-bold text-3xl mb-3" style="color:var(--plum)"></span>
+                            <button type="button" id="clear-photos" class="text-xs font-semibold px-4 py-1.5 rounded-full transition" style="background:#FCE4DF; color:var(--coral)">Reset Semua Foto</button>
                         </div>
                     </div>
                 </div>
@@ -68,41 +237,83 @@
 
             <!-- Submit Button / Loader -->
             <div class="text-center">
-                <button type="submit" id="processBtn" class="bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold py-3 px-10 rounded-full shadow-lg hover:shadow-xl hover:scale-105 transform transition duration-200 text-lg w-full md:w-auto min-w-[200px]">
+                <button type="submit" id="processBtn" class="btn-primary text-white font-bold py-4 px-10 rounded-full text-lg w-full md:w-auto md:min-w-[260px]">
                     Mulai Gabungkan Gambar 🚀
                 </button>
-                <div id="loadingIndicator" class="hidden mt-4 text-center">
-                    <svg class="animate-spin h-8 w-8 text-indigo-600 mx-auto mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <div id="loadingIndicator" class="hidden mt-5 text-center">
+                    <svg class="animate-spin h-8 w-8 mx-auto mb-2" style="color:var(--coral)" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
-                    <p class="text-indigo-600 font-medium animate-pulse">Sedang memproses... mohon tunggu.</p>
+                    <p class="font-medium animate-pulse" style="color:var(--ink-muted)">Sedang memproses&hellip; mohon tunggu.</p>
                 </div>
-                <div id="errorMessage" class="hidden mt-4 text-red-600 font-semibold bg-red-100 p-3 rounded-lg border border-red-200"></div>
+                <div id="errorMessage" class="hidden mt-5 font-semibold p-3 rounded-xl border" style="color:#B3261E; background:#FDECEA; border-color:#F5C6C2"></div>
             </div>
         </form>
 
         <!-- Result Section -->
         <div id="resultSection" class="hidden">
-            <div class="flex flex-col md:flex-row justify-between items-center mb-6">
-                <h2 class="text-2xl font-bold text-gray-800">🎉 Hasil Twibbon</h2>
-                <a id="downloadZipBtn" href="#" class="hidden mt-4 md:mt-0 bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-6 rounded-full shadow transition flex items-center gap-2">
+            <div class="flex flex-col md:flex-row justify-between items-center gap-4 mb-6">
+                <h2 class="font-display text-2xl md:text-3xl font-bold" style="color:var(--paper)">🎉 Hasil Twibbon</h2>
+                <a id="downloadZipBtn" href="#" class="hidden font-semibold py-2.5 px-6 rounded-full transition flex items-center gap-2" style="background:var(--marigold); color:var(--plum-deep); box-shadow:0 10px 24px -8px rgba(253,184,51,0.5);">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
                     Download Semua (ZIP)
                 </a>
             </div>
-            
-            <div id="resultGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
+
+            <div id="resultGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5 md:gap-6">
                 <!-- Data rendered dynamically here -->
             </div>
-            
-            <div class="mt-10 text-center">
-                <button type="button" onclick="location.reload()" class="text-indigo-600 hover:text-indigo-800 font-medium underline">
+
+            <div class="mt-12 text-center">
+                <button type="button" onclick="location.reload()" class="font-medium underline underline-offset-4" style="color:var(--marigold)">
                     Bikin Twibbon Baru Lagi
                 </button>
             </div>
         </div>
     </main>
+
+    <!-- History slide-over -->
+    <div id="historyOverlay" class="hidden fixed inset-0 z-40" style="background:rgba(10,4,20,0.55)"></div>
+    <aside id="historyPanel" class="hidden fixed top-0 right-0 h-full w-full sm:w-96 z-50 shadow-2xl p-6 overflow-y-auto" style="background:var(--paper)">
+        <div class="flex items-center justify-between mb-2">
+            <h3 class="font-display text-xl font-bold" style="color:var(--ink)">Riwayat Twibbon</h3>
+            <button id="closeHistoryBtn" type="button" class="text-2xl leading-none" style="color:var(--ink-muted)" aria-label="Tutup riwayat">&times;</button>
+        </div>
+        <p class="text-xs mb-5" style="color:var(--ink-muted)">
+            Riwayat ini hanya milikmu dan hanya tersimpan selama sesi browser saat ini — hilang begitu browser ditutup.
+        </p>
+        <div id="historyList" class="space-y-3"></div>
+        <button id="clearHistoryBtn" type="button" class="mt-6 text-xs font-semibold underline" style="color:var(--coral)">Hapus semua riwayat</button>
+    </aside>
+
+    <!-- Position editor modal -->
+    <div id="positionEditorOverlay" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" style="background:rgba(23,10,34,0.75)">
+        <div class="studio-card w-full max-w-md p-6">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="font-display text-xl font-bold" style="color:var(--ink)">Atur Posisi Foto</h3>
+                <button id="editorCancel" type="button" class="text-2xl leading-none" style="color:var(--ink-muted)" aria-label="Tutup editor">&times;</button>
+            </div>
+
+            <div id="editorStage" class="relative w-full rounded-xl overflow-hidden mx-auto select-none cursor-grab" style="max-width:340px; background:var(--paper-dim);">
+                <img id="editorPhoto" draggable="false" alt="" class="absolute top-0 left-0 w-full h-full object-cover pointer-events-none">
+                <img id="editorFrame" draggable="false" alt="" class="absolute top-0 left-0 w-full h-full pointer-events-none">
+            </div>
+            <p class="text-xs text-center mt-2" style="color:var(--ink-muted)">Geser foto di dalam bingkai untuk memindahkan posisinya</p>
+
+            <div class="mt-4">
+                <label class="text-xs font-semibold" style="color:var(--ink)">Zoom</label>
+                <input id="editorZoom" type="range" min="1" max="2.5" step="0.05" value="1" class="w-full">
+            </div>
+
+            <div id="editorStatus" class="hidden text-xs font-semibold mt-2 text-center"></div>
+
+            <div class="flex gap-3 mt-5">
+                <button id="editorReset" type="button" class="flex-1 text-sm font-semibold py-2 rounded-full" style="background:var(--paper-dim); color:var(--ink)">Reset ke Tengah</button>
+                <button id="editorSave" type="button" class="flex-1 btn-primary text-white text-sm font-bold py-2 rounded-full">Simpan Posisi</button>
+            </div>
+        </div>
+    </div>
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
