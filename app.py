@@ -232,8 +232,8 @@ def handle_upload():
 
         # Di mode browser, cukup baca bytes twibbon langsung dari stream
         IS_BROWSER_MODE = STORAGE_TYPE in ('browser', 'memory', 'ram', 'temp')
-        # Resolusi Full HD 2K (2048px tajam & jernih)
-        MAX_DIM = 2048
+        # Pertahankan 100% ukuran asli tanpa resize sama sekali
+        MAX_DIM = None
 
         optimized_twibbon_buf = optimize_image(twibbon_file.stream, max_dimension=MAX_DIM)
         optimized_twibbon_buf.seek(0)
@@ -255,37 +255,30 @@ def handle_upload():
             user_filename  = secure_filename(user_image.filename)
             input_filename = f"input_{idx}_{user_filename}"
 
-            # Optimasi foto pengguna
+            # Optimasi foto pengguna (100% ukuran & ketajaman asli)
             opt_user_buf = optimize_image(user_image.stream, max_dimension=MAX_DIM)
+            opt_user_buf.seek(0)
+            user_bytes = opt_user_buf.read()
 
             # Simpan ke storage hanya jika bukan mode browser
             if not IS_BROWSER_MODE:
                 user_storage = f"{session_path}/{input_filename}"
                 storage.save_file(user_storage, opt_user_buf)
 
-            # Buat preview JPEG kecil untuk editor posisi
-            preview_filename = f"preview_{idx}.jpg"
+            # Buat Data URL resolusi tinggi untuk preview editor posisi
+            preview_filename = f"preview_{idx}.png"
             preview_storage  = f"{session_path}/{preview_filename}"
-            preview_b64_url  = None
-            try:
-                opt_user_buf.seek(0)
-                with Image.open(opt_user_buf) as src_im:
-                    # Thumbnail kecil untuk preview editor
-                    thumb = src_im.copy().convert("RGB")
-                    thumb.thumbnail((480, 480), Image.LANCZOS)
-                    preview_buf = io.BytesIO()
-                    thumb.save(preview_buf, "JPEG", quality=80, optimize=True)
-                    preview_buf.seek(0)
-                    if IS_BROWSER_MODE:
-                        preview_b64_url = "data:image/jpeg;base64," + base64.b64encode(preview_buf.read()).decode()
-                    else:
-                        storage.save_file(preview_storage, preview_buf)
-            except Exception as e:
-                print(f"[preview error] {e}")
-                if not IS_BROWSER_MODE:
+            if IS_BROWSER_MODE:
+                preview_b64_url = "data:image/png;base64," + base64.b64encode(user_bytes).decode('utf-8')
+            else:
+                preview_b64_url = None
+                try:
+                    storage.save_file(preview_storage, opt_user_buf)
+                except Exception as e:
+                    print(f"[preview error] {e}")
                     preview_storage = f"{session_path}/{input_filename}"
 
-            # Render hasil overlay twibbon (Full HD PNG Lossless)
+            # Render hasil overlay twibbon (100% Resolusi & Kualitas Asli)
             file_root       = user_filename.rsplit('.', 1)[0]
             output_filename = f"result_{file_root}.png"
             output_storage  = f"{session_path}/{output_filename}"
@@ -293,13 +286,11 @@ def handle_upload():
             with tempfile.TemporaryDirectory() as tmpdir:
                 user_tmp    = os.path.join(tmpdir, input_filename)
                 twibbon_tmp = os.path.join(tmpdir, twibbon_filename)
-                out_ext     = 'png'
                 out_fname   = f"result_{file_root}.png"
                 output_tmp  = os.path.join(tmpdir, out_fname)
 
-                opt_user_buf.seek(0)
                 with open(user_tmp, 'wb') as f:
-                    f.write(opt_user_buf.read())
+                    f.write(user_bytes)
                 with open(twibbon_tmp, 'wb') as f:
                     f.write(twibbon_bytes)
 
@@ -308,7 +299,7 @@ def handle_upload():
                     if IS_BROWSER_MODE:
                         with open(output_tmp, 'rb') as f:
                             out_bytes = f.read()
-                        res_url  = "data:image/png;base64," + base64.b64encode(out_bytes).decode()
+                        res_url  = "data:image/png;base64," + base64.b64encode(out_bytes).decode('utf-8')
                         dl_url   = res_url
                         prev_url = preview_b64_url or res_url
                     else:

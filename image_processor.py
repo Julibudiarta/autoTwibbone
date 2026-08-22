@@ -7,11 +7,10 @@ from pillow_heif import register_heif_opener
 register_heif_opener()
 
 
-def optimize_image(img_input, max_dimension=2048, quality=88):
+def optimize_image(img_input, max_dimension=None, quality=95):
     """
-    Optimasi gambar input (resize jika > max_dimension, simpan dengan kompresi efisien).
-    Mempertahankan kejernihan & ketajaman visual setara gambar asli.
-    Menerima PIL Image, FileStream, atau BytesIO. Mengembalikan io.BytesIO.
+    Optimasi gambar input. Jika max_dimension diset, gambar akan di-resize.
+    Jika max_dimension=None, gambar dipertahankan 100% pada ukuran asli tanpa resize.
     """
     register_heif_opener()
     
@@ -27,7 +26,7 @@ def optimize_image(img_input, max_dimension=2048, quality=88):
         pass
 
     width, height = img.size
-    if max(width, height) > max_dimension:
+    if max_dimension and max(width, height) > max_dimension:
         ratio = max_dimension / float(max(width, height))
         new_size = (max(1, int(width * ratio)), max(1, int(height * ratio)))
         img = img.resize(new_size, Image.Resampling.LANCZOS)
@@ -36,21 +35,21 @@ def optimize_image(img_input, max_dimension=2048, quality=88):
     has_alpha = img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info)
 
     if has_alpha:
-        img.convert('RGBA').save(out_buf, 'PNG', optimize=True, compress_level=6)
+        img.convert('RGBA').save(out_buf, 'PNG', optimize=True, compress_level=3)
     else:
-        img.convert('RGB').save(out_buf, 'JPEG', quality=quality, optimize=True)
+        img.convert('RGB').save(out_buf, 'PNG', optimize=True, compress_level=3)
 
     out_buf.seek(0)
     return out_buf
 
 
-def process_twibbon(user_image_path, twibbon_image_path, output_path, zoom=1.0, pos_x=0.5, pos_y=0.5, max_dimension=2048):
-    """Menggabungkan foto pengguna dengan Twibbon secara presisi, tajam, dan efisien.
+def process_twibbon(user_image_path, twibbon_image_path, output_path, zoom=1.0, pos_x=0.5, pos_y=0.5, max_dimension=None):
+    """Menggabungkan foto pengguna dengan Twibbon secara presisi pada 100% ukuran asli tanpa penurunan kualitas.
 
     zoom  : faktor perbesaran di atas ukuran "cover" minimum (>= 1.0).
     pos_x : posisi horizontal jendela crop (0.0 - 1.0).
     pos_y : posisi vertikal jendela crop (0.0 - 1.0).
-    max_dimension : batas maksimum dimensi gambar agar ukuran file & pemrosesan optimal.
+    max_dimension : jika None, mempertahankan 100% resolusi asli twibbon.
     """
     try:
         register_heif_opener()
@@ -64,9 +63,8 @@ def process_twibbon(user_image_path, twibbon_image_path, output_path, zoom=1.0, 
 
         twibbon_img = Image.open(twibbon_image_path).convert("RGBA")
 
-        # Batasi dimensi maksimal Twibbon jika terlalu raksasa (misal 4000x4000 -> 2048x2048)
         t_width, t_height = twibbon_img.size
-        if max(t_width, t_height) > max_dimension:
+        if max_dimension and max(t_width, t_height) > max_dimension:
             scale = max_dimension / float(max(t_width, t_height))
             t_width = max(1, int(t_width * scale))
             t_height = max(1, int(t_height * scale))
@@ -102,10 +100,8 @@ def process_twibbon(user_image_path, twibbon_image_path, output_path, zoom=1.0, 
         canvas.paste(user_img, (0, 0))
         canvas.paste(twibbon_img, (0, 0), twibbon_img)
 
-        # Simpan hasil PNG dengan kompresi optimal
-        canvas.save(output_path, "PNG", compress_level=6, optimize=True)
+        canvas.save(output_path, "PNG", compress_level=3, optimize=True)
         return True
-
     except Exception as e:
         print(f"Error processing image: {e}")
         return False
