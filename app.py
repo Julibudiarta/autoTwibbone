@@ -22,6 +22,7 @@ except ImportError:
 # ── 2. Import standar & concurrency ──────────────────────────────────────────
 import io
 import uuid
+import base64
 import zipfile
 import tempfile
 import threading
@@ -228,11 +229,18 @@ def handle_upload():
         # 1. Simpan & optimasi file Twibbon
         twibbon_filename = secure_filename(twibbon_file.filename) or 'twibbon.png'
         twibbon_storage  = f"{session_path}/{twibbon_filename}"
-        
-        optimized_twibbon_buf = optimize_image(twibbon_file.stream, max_dimension=2048)
-        storage.save_file(twibbon_storage, optimized_twibbon_buf)
-        twibbon_bytes = storage.get_file(twibbon_storage).read()
-        twibbon_url   = _storage_url(twibbon_storage)
+
+        # Di mode browser, cukup baca bytes twibbon langsung dari stream
+        IS_BROWSER_MODE = STORAGE_TYPE in ('browser', 'memory', 'ram', 'temp')
+        # Resolusi max: lebih kecil di mode browser agar Base64 JSON tidak membengkak
+        MAX_DIM = 1024 if IS_BROWSER_MODE else 2048
+
+        optimized_twibbon_buf = optimize_image(twibbon_file.stream, max_dimension=MAX_DIM)
+        if not IS_BROWSER_MODE:
+            storage.save_file(twibbon_storage, optimized_twibbon_buf)
+        optimized_twibbon_buf.seek(0)
+        twibbon_bytes = optimized_twibbon_buf.read()
+        twibbon_url   = _storage_url(twibbon_storage) if not IS_BROWSER_MODE else None
 
         # 2. Fungsi worker paralel per foto pengguna
         def _process_single_image(idx_and_user_image):
@@ -242,34 +250,50 @@ def handle_upload():
 
             user_filename  = secure_filename(user_image.filename)
             input_filename = f"input_{idx}_{user_filename}"
-            user_storage   = f"{session_path}/{input_filename}"
 
-            # Optimasi foto pengguna sebelum diupload
-            opt_user_buf = optimize_image(user_image.stream, max_dimension=2048)
-            storage.save_file(user_storage, opt_user_buf)
+            # Optimasi foto pengguna
+            opt_user_buf = optimize_image(user_image.stream, max_dimension=MAX_DIM)
+
+            # Simpan ke storage hanya jika bukan mode browser
+            if not IS_BROWSER_MODE:
+                user_storage = f"{session_path}/{input_filename}"
+                storage.save_file(user_storage, opt_user_buf)
 
             # Buat preview JPEG kecil untuk editor posisi
             preview_filename = f"preview_{idx}.jpg"
             preview_storage  = f"{session_path}/{preview_filename}"
+            preview_b64_url  = None
             try:
                 opt_user_buf.seek(0)
                 with Image.open(opt_user_buf) as src_im:
+                    # Thumbnail kecil untuk preview editor
+                    thumb = src_im.copy().convert("RGB")
+                    thumb.thumbnail((480, 480), Image.LANCZOS)
                     preview_buf = io.BytesIO()
-                    src_im.convert("RGB").save(preview_buf, "JPEG", quality=80, optimize=True)
+                    thumb.save(preview_buf, "JPEG", quality=75, optimize=True)
                     preview_buf.seek(0)
-                    storage.save_file(preview_storage, preview_buf)
-            except Exception:
-                preview_storage = user_storage
+                    if IS_BROWSER_MODE:
+                        # Langsung encode sebagai data URL di sini
+                        preview_b64_url = "data:image/jpeg;base64," + base64.b64encode(preview_buf.read()).decode()
+                    else:
+                        storage.save_file(preview_storage, preview_buf)
+            except Exception as e:
+                print(f"[preview error] {e}")
+                if not IS_BROWSER_MODE:
+                    preview_storage = f"{session_path}/{input_filename}"
 
             # Render hasil overlay twibbon
             file_root       = user_filename.rsplit('.', 1)[0]
-            output_filename = f"result_{file_root}.png"
+            output_filename = f"result_{file_root}.jpg"  # JPEG lebih kecil dari PNG di mode browser
             output_storage  = f"{session_path}/{output_filename}"
 
             with tempfile.TemporaryDirectory() as tmpdir:
                 user_tmp    = os.path.join(tmpdir, input_filename)
                 twibbon_tmp = os.path.join(tmpdir, twibbon_filename)
-                output_tmp  = os.path.join(tmpdir, output_filename)
+                # Di browser mode simpan output sebagai JPEG untuk menghemat ukuran
+                out_ext     = 'jpg' if IS_BROWSER_MODE else 'png'
+                out_fname   = f"result_{file_root}.{out_ext}"
+                output_tmp  = os.path.join(tmpdir, out_fname)
 
                 opt_user_buf.seek(0)
                 with open(user_tmp, 'wb') as f:
@@ -277,14 +301,22 @@ def handle_upload():
                 with open(twibbon_tmp, 'wb') as f:
                     f.write(twibbon_bytes)
 
-                success = process_twibbon(user_tmp, twibbon_tmp, output_tmp, max_dimension=2048)
+                success = process_twibbon(user_tmp, twibbon_tmp, output_tmp, max_dimension=MAX_DIM)
                 if success:
-                    with open(output_tmp, 'rb') as f:
-                        storage.save_file(output_storage, f)
-                    
-                    res_url  = _storage_url(output_storage)
-                    dl_url   = res_url if res_url.startswith('data:') else f"/download/{uid}/{batch_id}/{output_filename}"
-                    prev_url = _storage_url(preview_storage)
+                    if IS_BROWSER_MODE:
+                        # Langsung encode output ke Base64 data URL, tidak perlu simpan ke storage
+                        with open(output_tmp, 'rb') as f:
+                            out_bytes = f.read()
+                        mime     = 'image/jpeg' if out_ext == 'jpg' else 'image/png'
+                        res_url  = f"data:{mime};base64," + base64.b64encode(out_bytes).decode()
+                        dl_url   = res_url
+                        prev_url = preview_b64_url or res_url
+                    else:
+                        with open(output_tmp, 'rb') as f:
+                            storage.save_file(output_storage, f)
+                        res_url  = _storage_url(output_storage)
+                        dl_url   = f"/download/{uid}/{batch_id}/{out_fname}"
+                        prev_url = _storage_url(preview_storage)
 
                     return {
                         'idx':           idx,
@@ -292,7 +324,7 @@ def handle_upload():
                         'result_url':    res_url,
                         'download_url':  dl_url,
                         'preview_url':   prev_url,
-                        'filename':      output_filename,
+                        'filename':      out_fname,
                         'user_input':    input_filename,
                         'preview_input': preview_filename,
                         'pos_x': 0.5, 'pos_y': 0.5, 'zoom': 1.0,
@@ -318,15 +350,27 @@ def handle_upload():
         zip_url = None
         if len(processed_files) > 1:
             zip_filename = f"twibbon_batch_{batch_id}.zip"
-            zip_storage  = f"{uid}/{zip_filename}"
             zip_buf = io.BytesIO()
             with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 for pf in processed_files:
-                    data = storage.get_file(f"{session_path}/{pf['filename']}").read()
-                    zipf.writestr(pf['filename'], data)
+                    if IS_BROWSER_MODE:
+                        # Ambil bytes dari Base64 data URL yang ada di result_url
+                        data_url = pf['result_url']
+                        if ',' in data_url:
+                            img_bytes = base64.b64decode(data_url.split(',', 1)[1])
+                        else:
+                            img_bytes = b''
+                    else:
+                        img_bytes = storage.get_file(f"{session_path}/{pf['filename']}").read()
+                    zipf.writestr(pf['filename'], img_bytes)
             zip_buf.seek(0)
-            storage.save_file(zip_storage, zip_buf)
-            zip_url = _storage_url(zip_storage) if STORAGE_TYPE in ('browser', 'memory', 'ram') else f"/download_zip/{uid}/{zip_filename}"
+            if IS_BROWSER_MODE:
+                # ZIP sebagai data URL agar bisa diunduh langsung tanpa server
+                zip_url = "data:application/zip;base64," + base64.b64encode(zip_buf.read()).decode()
+            else:
+                zip_storage = f"{uid}/{zip_filename}"
+                storage.save_file(zip_storage, zip_buf)
+                zip_url = f"/download_zip/{uid}/{zip_filename}"
 
         batch_record = {
             'uid':              uid,
@@ -340,8 +384,9 @@ def handle_upload():
         }
         USER_HISTORY.setdefault(uid, []).insert(0, batch_record)
 
-        # 5. Pemicu pembersihan otomatis di background (jika storage > 900MB -> bersihkan hingga 500MB)
-        trigger_async_cleanup()
+        # 5. Pemicu pembersihan otomatis di background (hanya untuk storage non-browser)
+        if not IS_BROWSER_MODE:
+            trigger_async_cleanup()
 
         return jsonify(batch_record), 200
 

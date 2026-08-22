@@ -138,11 +138,31 @@
   }
 
   // ================= Twibbon dropzone =================
+  // Elemen preview thumbnail
+  let twibbonThumbEl = null;
+
+  function showTwibbonThumbnail(file) {
+    // Tampilkan thumbnail gambar pakai FileReader (100% client-side)
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      if (!twibbonThumbEl) {
+        twibbonThumbEl = document.createElement('img');
+        twibbonThumbEl.className = 'w-20 h-20 object-contain rounded-xl border-2 border-white shadow-md';
+        twibbonThumbEl.alt = 'Preview twibbon';
+        // Sisipkan sebelum twibbonName
+        twibbonPreview.insertBefore(twibbonThumbEl, twibbonPreview.firstChild);
+      }
+      twibbonThumbEl.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
   bindDropzone(twibbonInput, () => {
     if (!twibbonInput.files.length) return;
     const file = twibbonInput.files[0];
     twibbonName.textContent = file.name;
     twibbonPreview.classList.remove('hidden');
+    showTwibbonThumbnail(file);
 
     const isPng = file.name.toLowerCase().endsWith('.png') || file.type === 'image/png';
     nonPngBadge.classList.toggle('hidden', isPng);
@@ -164,6 +184,7 @@
     nonPngBadge.classList.add('hidden');
     openColorRemoverBtn.classList.add('hidden');
     twibbonHint.classList.add('hidden');
+    if (twibbonThumbEl) { twibbonThumbEl.src = ''; }
     crState.originalFile = null;
     crState.convertedBlob = null;
     crState.convertedUrl = null;
@@ -171,9 +192,36 @@
 
   // ================= Photos dropzone =================
   bindDropzone(userFilesInput, () => {
-    if (userFilesInput.files.length) {
-      photosCount.textContent = `${userFilesInput.files.length} foto dipilih`;
-      photosPreview.classList.remove('hidden');
+    if (!userFilesInput.files.length) return;
+    const files = Array.from(userFilesInput.files);
+    photosCount.textContent = `${files.length} foto dipilih`;
+    photosPreview.classList.remove('hidden');
+
+    // Tampilkan grid thumbnail mini dari foto yang dipilih (max 6)
+    let thumbGrid = photosPreview.querySelector('.thumb-grid');
+    if (!thumbGrid) {
+      thumbGrid = document.createElement('div');
+      thumbGrid.className = 'thumb-grid flex flex-wrap gap-1 justify-center mt-2 max-h-20 overflow-hidden';
+      photosPreview.insertBefore(thumbGrid, photosPreview.querySelector('#clear-photos'));
+    }
+    thumbGrid.innerHTML = '';
+    files.slice(0, 6).forEach((f) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = document.createElement('img');
+        img.src = ev.target.result;
+        img.className = 'w-12 h-12 object-cover rounded-lg border-2 border-white shadow';
+        img.alt = f.name;
+        thumbGrid.appendChild(img);
+      };
+      reader.readAsDataURL(f);
+    });
+    if (files.length > 6) {
+      const more = document.createElement('span');
+      more.className = 'w-12 h-12 rounded-lg flex items-center justify-center text-xs font-bold border-2 border-white shadow';
+      more.style.cssText = 'background:var(--plum); color:var(--marigold);';
+      more.textContent = `+${files.length - 6}`;
+      thumbGrid.appendChild(more);
     }
   });
 
@@ -181,6 +229,8 @@
     e.stopPropagation();
     userFilesInput.value = '';
     photosPreview.classList.add('hidden');
+    const thumbGrid = photosPreview.querySelector('.thumb-grid');
+    if (thumbGrid) thumbGrid.innerHTML = '';
   });
 
   // ================= Submit upload =================
