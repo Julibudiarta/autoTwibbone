@@ -232,8 +232,8 @@ def handle_upload():
 
         # Di mode browser, cukup baca bytes twibbon langsung dari stream
         IS_BROWSER_MODE = STORAGE_TYPE in ('browser', 'memory', 'ram', 'temp')
-        # Resolusi max: lebih kecil di mode browser agar Base64 JSON tidak membengkak
-        MAX_DIM = 1024 if IS_BROWSER_MODE else 2048
+        # Resolusi Full HD 2K (2048px tajam & jernih)
+        MAX_DIM = 2048
 
         optimized_twibbon_buf = optimize_image(twibbon_file.stream, max_dimension=MAX_DIM)
         optimized_twibbon_buf.seek(0)
@@ -274,10 +274,9 @@ def handle_upload():
                     thumb = src_im.copy().convert("RGB")
                     thumb.thumbnail((480, 480), Image.LANCZOS)
                     preview_buf = io.BytesIO()
-                    thumb.save(preview_buf, "JPEG", quality=75, optimize=True)
+                    thumb.save(preview_buf, "JPEG", quality=80, optimize=True)
                     preview_buf.seek(0)
                     if IS_BROWSER_MODE:
-                        # Langsung encode sebagai data URL di sini
                         preview_b64_url = "data:image/jpeg;base64," + base64.b64encode(preview_buf.read()).decode()
                     else:
                         storage.save_file(preview_storage, preview_buf)
@@ -286,17 +285,16 @@ def handle_upload():
                 if not IS_BROWSER_MODE:
                     preview_storage = f"{session_path}/{input_filename}"
 
-            # Render hasil overlay twibbon
+            # Render hasil overlay twibbon (Full HD PNG Lossless)
             file_root       = user_filename.rsplit('.', 1)[0]
-            output_filename = f"result_{file_root}.jpg"  # JPEG lebih kecil dari PNG di mode browser
+            output_filename = f"result_{file_root}.png"
             output_storage  = f"{session_path}/{output_filename}"
 
             with tempfile.TemporaryDirectory() as tmpdir:
                 user_tmp    = os.path.join(tmpdir, input_filename)
                 twibbon_tmp = os.path.join(tmpdir, twibbon_filename)
-                # Di browser mode simpan output sebagai JPEG untuk menghemat ukuran
-                out_ext     = 'jpg' if IS_BROWSER_MODE else 'png'
-                out_fname   = f"result_{file_root}.{out_ext}"
+                out_ext     = 'png'
+                out_fname   = f"result_{file_root}.png"
                 output_tmp  = os.path.join(tmpdir, out_fname)
 
                 opt_user_buf.seek(0)
@@ -308,11 +306,9 @@ def handle_upload():
                 success = process_twibbon(user_tmp, twibbon_tmp, output_tmp, max_dimension=MAX_DIM)
                 if success:
                     if IS_BROWSER_MODE:
-                        # Langsung encode output ke Base64 data URL, tidak perlu simpan ke storage
                         with open(output_tmp, 'rb') as f:
                             out_bytes = f.read()
-                        mime     = 'image/jpeg' if out_ext == 'jpg' else 'image/png'
-                        res_url  = f"data:{mime};base64," + base64.b64encode(out_bytes).decode()
+                        res_url  = "data:image/png;base64," + base64.b64encode(out_bytes).decode()
                         dl_url   = res_url
                         prev_url = preview_b64_url or res_url
                     else:
