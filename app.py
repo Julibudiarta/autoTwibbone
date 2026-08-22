@@ -236,11 +236,15 @@ def handle_upload():
         MAX_DIM = 1024 if IS_BROWSER_MODE else 2048
 
         optimized_twibbon_buf = optimize_image(twibbon_file.stream, max_dimension=MAX_DIM)
-        if not IS_BROWSER_MODE:
-            storage.save_file(twibbon_storage, optimized_twibbon_buf)
         optimized_twibbon_buf.seek(0)
         twibbon_bytes = optimized_twibbon_buf.read()
-        twibbon_url   = _storage_url(twibbon_storage) if not IS_BROWSER_MODE else None
+
+        if IS_BROWSER_MODE:
+            b64_twibbon = base64.b64encode(twibbon_bytes).decode('utf-8')
+            twibbon_url = f"data:image/png;base64,{b64_twibbon}"
+        else:
+            storage.save_file(twibbon_storage, optimized_twibbon_buf)
+            twibbon_url = _storage_url(twibbon_storage)
 
         # 2. Fungsi worker paralel per foto pengguna
         def _process_single_image(idx_and_user_image):

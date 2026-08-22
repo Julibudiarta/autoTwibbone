@@ -400,6 +400,44 @@
     });
   });
 
+  function renderCanvasReposition(userImg, twibbonImg, posX, posY, zoom) {
+    return new Promise((resolve, reject) => {
+      try {
+        const W = twibbonImg.naturalWidth || 1080;
+        const H = twibbonImg.naturalHeight || 1080;
+        const uW = userImg.naturalWidth || 1080;
+        const uH = userImg.naturalHeight || 1080;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = W;
+        canvas.height = H;
+        const ctx = canvas.getContext('2d');
+
+        const wRatio = W / uW;
+        const hRatio = H / uH;
+        const scale = Math.max(wRatio, hRatio) * Math.max(1.0, zoom);
+
+        const targetW = uW * scale;
+        const targetH = uH * scale;
+
+        const slackX = targetW - W;
+        const slackY = targetH - H;
+
+        const left = -(slackX * Math.min(Math.max(posX, 0), 1));
+        const top = -(slackY * Math.min(Math.max(posY, 0), 1));
+
+        ctx.clearRect(0, 0, W, H);
+        ctx.drawImage(userImg, left, top, targetW, targetH);
+        ctx.drawImage(twibbonImg, 0, 0, W, H);
+
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+        resolve(dataUrl);
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
   editorSaveBtn.addEventListener('click', async () => {
     if (!editorState) return;
     editorStatus.classList.remove('hidden');
@@ -408,37 +446,75 @@
     editorSaveBtn.disabled = true;
 
     try {
-      const res = await fetch('/reposition', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          batch_id: editorState.batchId,
-          filename: editorState.filename,
-          pos_x: editorState.posX,
-          pos_y: editorState.posY,
-          zoom: editorState.zoom,
-        }),
-      });
-      const contentType = res.headers.get('content-type') || '';
-      if (!contentType.includes('application/json')) {
-        const text = await res.text();
-        console.error('Non-JSON response:', text.slice(0, 300));
-        throw new Error('Server mengembalikan error. Cek konsol untuk detailnya.');
-      }
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal menyimpan posisi.');
+      let resultUrl = null;
+      let downloadUrl = null;
 
-      editorState.imgEl.src = data.result_url;
-      if (data.download_url) {
-        const cardDlLink = editorState.imgEl.closest('.result-card')?.querySelector('.download-link');
-        if (cardDlLink) cardDlLink.href = data.download_url;
+      // Jika gambar berformat data: (Browser Mode / Vercel Stateless),
+      // render posisi langsung di browser (100% instan, bebas error RAM 404!)
+      const isDataUrl = (editorPhoto.src && editorPhoto.src.startsWith('data:')) ||
+                        (editorFrame.src && editorFrame.src.startsWith('data:'));
+
+      if (isDataUrl) {
+        resultUrl = await renderCanvasReposition(
+          editorPhoto,
+          editorFrame,
+          editorState.posX,
+          editorState.posY,
+          editorState.zoom
+        );
+        downloadUrl = resultUrl;
+      } else {
+        // Coba via server (Local / Supabase)
+        try {
+          const res = await fetch('/reposition', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              batch_id: editorState.batchId,
+              filename: editorState.filename,
+              pos_x: editorState.posX,
+              pos_y: editorState.posY,
+              zoom: editorState.zoom,
+            }),
+          });
+          if (res.ok) {
+            const contentType = res.headers.get('content-type') || '';
+            if (contentType.includes('application/json')) {
+              const data = await res.json();
+              resultUrl = data.result_url;
+              downloadUrl = data.download_url;
+            }
+          }
+        } catch (serverErr) {
+          console.warn('[reposition fallback to canvas]', serverErr);
+        }
+
+        // Fallback jika server mengembalikan 404 / file RAM hilang
+        if (!resultUrl) {
+          resultUrl = await renderCanvasReposition(
+            editorPhoto,
+            editorFrame,
+            editorState.posX,
+            editorState.posY,
+            editorState.zoom
+          );
+          downloadUrl = resultUrl;
+        }
       }
+
+      // Simpan koordinat baru di editorState
+      editorState.imgEl.src = resultUrl;
+      if (downloadUrl) {
+        const cardDlLink = editorState.imgEl.closest('.result-card')?.querySelector('.download-link');
+        if (cardDlLink) cardDlLink.href = downloadUrl;
+      }
+
       editorStatus.style.color = '#1a7f4c';
       editorStatus.textContent = 'Posisi tersimpan!';
-      setTimeout(closeEditor, 500);
+      setTimeout(closeEditor, 400);
     } catch (err) {
       editorStatus.style.color = 'var(--coral)';
-      editorStatus.textContent = err.message;
+      editorStatus.textContent = err.message || 'Gagal menyimpan posisi.';
     } finally {
       editorSaveBtn.disabled = false;
     }
