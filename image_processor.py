@@ -1,68 +1,109 @@
 import os
-from PIL import Image
+import io
+from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
 
 # Register HEIF opener for Pillow to handle .heic files
 register_heif_opener()
 
 
-def process_twibbon(user_image_path, twibbon_image_path, output_path, zoom=1.0, pos_x=0.5, pos_y=0.5):
-    """Menggabungkan foto pengguna dengan Twibbon.
+def optimize_image(img_input, max_dimension=2048, quality=88):
+    """
+    Optimasi gambar input (resize jika > max_dimension, simpan dengan kompresi efisien).
+    Mempertahankan kejernihan & ketajaman visual setara gambar asli.
+    Menerima PIL Image, FileStream, atau BytesIO. Mengembalikan io.BytesIO.
+    """
+    register_heif_opener()
+    
+    if isinstance(img_input, Image.Image):
+        img = img_input
+    else:
+        img = Image.open(img_input)
+
+    # Perbaiki orientasi EXIF (misal foto HP berotasi)
+    try:
+        img = ImageOps.exif_transpose(img)
+    except Exception:
+        pass
+
+    width, height = img.size
+    if max(width, height) > max_dimension:
+        ratio = max_dimension / float(max(width, height))
+        new_size = (max(1, int(width * ratio)), max(1, int(height * ratio)))
+        img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+    out_buf = io.BytesIO()
+    has_alpha = img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info)
+
+    if has_alpha:
+        img.convert('RGBA').save(out_buf, 'PNG', optimize=True, compress_level=6)
+    else:
+        img.convert('RGB').save(out_buf, 'JPEG', quality=quality, optimize=True)
+
+    out_buf.seek(0)
+    return out_buf
+
+
+def process_twibbon(user_image_path, twibbon_image_path, output_path, zoom=1.0, pos_x=0.5, pos_y=0.5, max_dimension=2048):
+    """Menggabungkan foto pengguna dengan Twibbon secara presisi, tajam, dan efisien.
 
     zoom  : faktor perbesaran di atas ukuran "cover" minimum (>= 1.0).
-    pos_x : posisi horizontal jendela crop, 0.0 = rata kiri, 1.0 = rata kanan, 0.5 = tengah.
-    pos_y : posisi vertikal jendela crop, 0.0 = rata atas, 1.0 = rata bawah, 0.5 = tengah.
-
-    Nilai default (zoom=1.0, pos_x=pos_y=0.5) menghasilkan perilaku yang sama
-    persis dengan versi sebelumnya (center-crop otomatis).
+    pos_x : posisi horizontal jendela crop (0.0 - 1.0).
+    pos_y : posisi vertikal jendela crop (0.0 - 1.0).
+    max_dimension : batas maksimum dimensi gambar agar ukuran file & pemrosesan optimal.
     """
     try:
-        # Panggil lagi di sini untuk memastikan decoder aktif dalam thread/proses ini
         register_heif_opener()
 
-        # Load the user and twibbon images
-        user_img = Image.open(user_image_path).convert("RGBA")
+        user_img = Image.open(user_image_path)
+        try:
+            user_img = ImageOps.exif_transpose(user_img)
+        except Exception:
+            pass
+        user_img = user_img.convert("RGBA")
+
         twibbon_img = Image.open(twibbon_image_path).convert("RGBA")
 
-        # Get size of the twibbon
+        # Batasi dimensi maksimal Twibbon jika terlalu raksasa (misal 4000x4000 -> 2048x2048)
         t_width, t_height = twibbon_img.size
+        if max(t_width, t_height) > max_dimension:
+            scale = max_dimension / float(max(t_width, t_height))
+            t_width = max(1, int(t_width * scale))
+            t_height = max(1, int(t_height * scale))
+            twibbon_img = twibbon_img.resize((t_width, t_height), Image.Resampling.LANCZOS)
 
-        # Fit user image to the twibbon size (cover, maintaining aspect ratio)
+        # Fit user image to the twibbon size (cover mode)
         u_width, u_height = user_img.size
-        width_ratio = t_width / u_width
-        height_ratio = t_height / u_height
+        width_ratio = t_width / float(u_width)
+        height_ratio = t_height / float(u_height)
 
-        zoom = max(1.0, float(zoom))  # jangan sampai di bawah ukuran "cover" minimum
+        zoom = max(1.0, float(zoom))
         ratio = max(width_ratio, height_ratio) * zoom
 
         new_size = (max(1, int(u_width * ratio)), max(1, int(u_height * ratio)))
         user_img = user_img.resize(new_size, Image.Resampling.LANCZOS)
 
-        # Sisa ruang yang bisa digeser (slack) di tiap sumbu setelah di-resize
+        # Sisa ruang crop (slack)
         slack_x = max(0, user_img.width - t_width)
         slack_y = max(0, user_img.height - t_height)
 
         pos_x = min(max(float(pos_x), 0.0), 1.0)
         pos_y = min(max(float(pos_y), 0.0), 1.0)
 
-        left = slack_x * pos_x
-        top = slack_y * pos_y
+        left = int(slack_x * pos_x)
+        top = int(slack_y * pos_y)
         right = left + t_width
         bottom = top + t_height
 
         user_img = user_img.crop((left, top, right, bottom))
 
-        # Create a blank canvas matching twibbon size
+        # Canvas penggabungan
         canvas = Image.new('RGBA', (t_width, t_height), (0, 0, 0, 0))
-
-        # Paste user image
         canvas.paste(user_img, (0, 0))
-
-        # Apply twibbon over user image transparently (using it as a mask itself via the third parameter)
         canvas.paste(twibbon_img, (0, 0), twibbon_img)
 
-        # Save result as PNG to maintain quality
-        canvas.save(output_path, "PNG", compress_level=6)
+        # Simpan hasil PNG dengan kompresi optimal
+        canvas.save(output_path, "PNG", compress_level=6, optimize=True)
         return True
 
     except Exception as e:

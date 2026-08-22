@@ -1,60 +1,184 @@
+"""
+Auto-Twibbon Studio — server tunggal teroptimasi & cepat.
+Jalankan: python app.py
+
+Fitur Otomatisasi & Optimasi:
+  1. STORAGE_TYPE=supabase | local
+  2. Auto Cleanup Storage: Jika total file > 900MB, otomatis menghapus file terlama hingga tersisa 500MB
+  3. Pemrosesan Paralel (Multi-threading) untuk upload & render batch foto
+  4. Pre-kompresi & resizing cerdas tanpa mengurangi ketajaman visual (tajam & hemat ruang)
+"""
+
 import os
-import zipfile
+
+# ── 1. Muat .env SEBELUM apapun (termasuk storage init) ──────────────────────
+try:
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+    print("[.env] Konfigurasi berhasil dimuat dari file .env")
+except ImportError:
+    print("[.env] python-dotenv tidak terinstall — lewati")
+
+# ── 2. Import standar & concurrency ──────────────────────────────────────────
+import io
 import uuid
+import zipfile
+import tempfile
+import threading
+import numpy as np
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from flask import Flask, render_template, request, jsonify, send_file, url_for, session
 from werkzeug.utils import secure_filename
 from PIL import Image
-from image_processor import process_twibbon
-from pillow_heif import register_heif_opener
 
-# Pastikan opener terdaftar di proses utama Flask
-register_heif_opener()
-print("Auto-Twibbon Studio: Dukungan HEIC Aktif")
+from image_processor import process_twibbon, optimize_image
+from storage import create_storage
 
-app = Flask(__name__)
-# Maximum Upload Size 100 MB
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
-app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['OUTPUT_FOLDER'] = 'output'
-# Dibutuhkan untuk menandatangani cookie sesi. Di produksi, ambil dari
-# environment variable, jangan hardcode.
+# ── 3. HEIC support ───────────────────────────────────────────────────────────
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+    print("[HEIC] Dukungan HEIC/HEIF aktif")
+except ImportError:
+    print("[HEIC] pillow-heif tidak terinstall — format HEIC tidak didukung")
+
+# ── 4. Flask app ──────────────────────────────────────────────────────────────
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+app = Flask(
+    __name__,
+    template_folder=os.path.join(ROOT_DIR, 'templates'),
+    static_folder=os.path.join(ROOT_DIR, 'static')
+)
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024   # 100 MB max upload
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-only-change-me')
 
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
+# ── 5. Storage backend ────────────────────────────────────────────────────────
+STORAGE_TYPE = os.environ.get('STORAGE_TYPE', 'local').strip().lower()
 
-# Riwayat per-browser-session, disimpan HANYA di memori proses (bukan database).
-# Artinya: otomatis terpisah per user (per uid sesi), otomatis "sementara"
-# (hilang saat server restart), dan tidak pernah bocor ke sesi/browser lain.
-# { uid: [ {batch_id, created_at, message, twibbon_filename, files:[...], zip_url, uid}, ... ] }
-USER_HISTORY = {}
+if STORAGE_TYPE in ('browser', 'memory', 'ram', 'temp'):
+    storage = create_storage('browser')
+    print("[Storage] Backend: BROWSER (RAM Memori)  |  File tidak disimpan ke Disk / Cloud!")
+
+elif STORAGE_TYPE == 'supabase':
+    supabase_url = os.environ.get('SUPABASE_URL', '').strip()
+    supabase_key = os.environ.get('SUPABASE_KEY', '').strip()
+    bucket_name  = os.environ.get('SUPABASE_BUCKET', 'twibbon-files').strip()
+
+    if not supabase_url or not supabase_key:
+        raise RuntimeError(
+            "STORAGE_TYPE=supabase tapi SUPABASE_URL / SUPABASE_KEY belum diisi di .env!"
+        )
+
+    storage = create_storage(
+        'supabase',
+        supabase_url=supabase_url,
+        supabase_key=supabase_key,
+        bucket_name=bucket_name,
+    )
+    print(f"[Storage] Backend: Supabase  |  bucket: {bucket_name}")
+
+else:
+    local_path = os.environ.get('LOCAL_STORAGE_PATH', 'storage').strip()
+    storage = create_storage('local', base_path=local_path)
+    print(f"[Storage] Backend: Local Filesystem  |  path: {local_path}/")
+
+# ── 6. Session history (in-memory) ───────────────────────────────────────────
+USER_HISTORY: dict = {}
 
 
-def get_uid():
-    """Ambil id unik untuk sesi browser ini, buat baru kalau belum ada.
-    Disimpan di session cookie yang ditandatangani (bukan baris database
-    permanen) sehingga otomatis kedaluwarsa mengikuti sesi/riwayat browser."""
+# ══════════════════════════════════════════════════════════════════════════════
+# Helpers
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_uid() -> str:
+    """Kembalikan uid unik per sesi browser; buat baru jika belum ada."""
     if 'uid' not in session:
         session['uid'] = str(uuid.uuid4())
         session.permanent = False
     return session['uid']
 
 
-def _check_owner(uid):
+def _check_owner(uid: str) -> bool:
     return session.get('uid') == uid
 
 
-def _find_batch(uid, batch_id):
+def _find_batch(uid: str, batch_id: str) -> dict | None:
     return next((b for b in USER_HISTORY.get(uid, []) if b['batch_id'] == batch_id), None)
 
 
+def _storage_url(path: str) -> str:
+    """
+    Kembalikan URL yang bisa dibuka browser untuk file di storage.
+      - Supabase : public URL dari bucket
+      - Local    : route internal Flask /serve/<path>
+    """
+    if STORAGE_TYPE == 'supabase':
+        return storage.get_download_url(path)
+    return f"/serve/{path}"
+
+
+def trigger_async_cleanup():
+    """Jalankan pengecekan & pembersihan storage otomatis di background thread."""
+    def _run():
+        try:
+            # 900MB limit trigger, bersihkan hingga 500MB
+            storage.cleanup_if_needed(threshold_bytes=900 * 1024 * 1024, target_bytes=500 * 1024 * 1024)
+        except Exception as e:
+            print(f"[Async Cleanup Error] {e}")
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _remove_color(image: Image.Image, target_rgb: tuple, tolerance: int = 30) -> Image.Image:
+    """
+    Hapus warna target dari gambar lalu jadikan transparan.
+    Menggunakan jarak Euclidean di ruang RGB dengan fade anti-aliasing.
+    """
+    img  = image.convert("RGBA")
+    data = np.array(img, dtype=np.float32)      # shape (H, W, 4)
+
+    r, g, b = target_rgb
+    diff  = data[:, :, :3] - np.array([r, g, b], dtype=np.float32)
+    dist  = np.sqrt(np.sum(diff ** 2, axis=2))  # shape (H, W)
+
+    fade_range   = tolerance * 1.5 + 1e-9
+    alpha_factor = np.clip((dist - tolerance) / fade_range, 0.0, 1.0)
+    data[:, :, 3] = data[:, :, 3] * alpha_factor
+
+    return Image.fromarray(data.astype(np.uint8), "RGBA")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Routes
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Halaman utama ─────────────────────────────────────────────────────────────
 @app.route('/')
 def index():
-    get_uid()  # pastikan setiap pengunjung langsung punya id sesi
+    get_uid()
     return render_template('index.html')
 
 
+# ── Sajikan file lokal (hanya aktif saat STORAGE_TYPE=local) ─────────────────
+@app.route('/serve/<path:file_path>')
+def serve_storage_file(file_path):
+    """Sajikan file dari local storage; tidak dipakai saat Supabase aktif."""
+    try:
+        f   = storage.get_file(file_path)
+        ext = file_path.rsplit('.', 1)[-1].lower() if '.' in file_path else ''
+        mime = {
+            'png': 'image/png',
+            'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+            'zip': 'application/zip',
+        }.get(ext, 'application/octet-stream')
+        return send_file(f, mimetype=mime)
+    except FileNotFoundError:
+        return "File tidak ditemukan.", 404
+
+
+# ── Upload & proses twibbon teroptimasi & paralel ─────────────────────────────
 @app.route('/upload', methods=['POST'])
 def handle_upload():
     uid = get_uid()
@@ -63,110 +187,150 @@ def handle_upload():
         return jsonify({'error': 'Pastikan Anda mengunggah File Twibbon dan juga File Foto Pengguna.'}), 400
 
     twibbon_file = request.files['twibbon']
-    user_images = request.files.getlist('user_images')
+    user_images  = request.files.getlist('user_images')
 
     if twibbon_file.filename == '':
         return jsonify({'error': 'File Twibbon kosong atau tidak terpilih.'}), 400
-
-    if len(user_images) == 0 or user_images[0].filename == '':
+    if not user_images or user_images[0].filename == '':
         return jsonify({'error': 'Tidak ada kumpulan file foto pengguna yang diunggah.'}), 400
 
-    # Buat batch ID untuk pemrosesan ini, dinest di bawah folder milik uid
-    batch_id = str(uuid.uuid4())
-    session_upload_path = os.path.join(app.config['UPLOAD_FOLDER'], uid, batch_id)
-    session_output_path = os.path.join(app.config['OUTPUT_FOLDER'], uid, batch_id)
-    os.makedirs(session_upload_path, exist_ok=True)
-    os.makedirs(session_output_path, exist_ok=True)
+    batch_id     = str(uuid.uuid4())
+    session_path = f"{uid}/{batch_id}"
 
     try:
-        # Simpan Twibbon
-        twibbon_filename = secure_filename(twibbon_file.filename)
-        twibbon_path = os.path.join(session_upload_path, twibbon_filename)
-        twibbon_file.save(twibbon_path)
+        storage.create_folder(session_path)
 
-        processed_files = []
+        # 1. Simpan & optimasi file Twibbon
+        twibbon_filename = secure_filename(twibbon_file.filename) or 'twibbon.png'
+        twibbon_storage  = f"{session_path}/{twibbon_filename}"
+        
+        # Pre-compress twibbon jika perlu
+        optimized_twibbon_buf = optimize_image(twibbon_file.stream, max_dimension=2048)
+        storage.save_file(twibbon_storage, optimized_twibbon_buf)
 
-        # Eksekusi foto pengguna
-        for idx, user_image in enumerate(user_images):
-            if user_image.filename:
-                user_filename = secure_filename(user_image.filename)
-                input_filename = f"input_{idx}_{user_filename}"
-                user_path = os.path.join(session_upload_path, input_filename)
-                user_image.save(user_path)
+        # Download twibbon byte sekali untuk seluruh thread
+        twibbon_bytes = storage.get_file(twibbon_storage).read()
 
-                # Buat pratinjau JPEG dari foto asli (untuk editor posisi di browser;
-                # beberapa format seperti HEIC tidak bisa ditampilkan langsung oleh <img>)
-                preview_filename = f"preview_{idx}.jpg"
-                try:
-                    with Image.open(user_path) as src_im:
-                        src_im.convert("RGB").save(
-                            os.path.join(session_upload_path, preview_filename), "JPEG", quality=88
-                        )
-                except Exception:
-                    preview_filename = None
+        # 2. Fungsi worker paralel per foto pengguna
+        def _process_single_image(idx_and_user_image):
+            idx, user_image = idx_and_user_image
+            if not user_image or not user_image.filename:
+                return None
 
-                # Definisi output PNG
-                file_root = user_filename.rsplit('.', 1)[0]
-                output_filename = f"result_{file_root}.png"
-                output_path = os.path.join(session_output_path, output_filename)
+            user_filename  = secure_filename(user_image.filename)
+            input_filename = f"input_{idx}_{user_filename}"
+            user_storage   = f"{session_path}/{input_filename}"
 
-                # Mulai gabungkan via PIL (posisi default: tengah, tanpa zoom tambahan)
-                success = process_twibbon(user_path, twibbon_path, output_path)
+            # Optimasi foto pengguna sebelum diupload
+            opt_user_buf = optimize_image(user_image.stream, max_dimension=2048)
+            storage.save_file(user_storage, opt_user_buf)
+
+            # Buat preview JPEG kecil untuk editor posisi
+            preview_filename = f"preview_{idx}.jpg"
+            try:
+                opt_user_buf.seek(0)
+                with Image.open(opt_user_buf) as src_im:
+                    preview_buf = io.BytesIO()
+                    src_im.convert("RGB").save(preview_buf, "JPEG", quality=80, optimize=True)
+                    preview_buf.seek(0)
+                    storage.save_file(f"{session_path}/{preview_filename}", preview_buf)
+            except Exception:
+                preview_filename = None
+
+            # Render hasil overlay twibbon
+            file_root       = user_filename.rsplit('.', 1)[0]
+            output_filename = f"result_{file_root}.png"
+            output_storage  = f"{session_path}/{output_filename}"
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                user_tmp    = os.path.join(tmpdir, input_filename)
+                twibbon_tmp = os.path.join(tmpdir, twibbon_filename)
+                output_tmp  = os.path.join(tmpdir, output_filename)
+
+                opt_user_buf.seek(0)
+                with open(user_tmp, 'wb') as f:
+                    f.write(opt_user_buf.read())
+                with open(twibbon_tmp, 'wb') as f:
+                    f.write(twibbon_bytes)
+
+                success = process_twibbon(user_tmp, twibbon_tmp, output_tmp, max_dimension=2048)
                 if success:
-                    download_url = url_for('download_file', uid=uid, batch_id=batch_id, filename=output_filename)
-                    processed_files.append({
-                        'original': user_filename,
-                        'result_url': download_url,
-                        'filename': output_filename,
-                        # Disimpan agar /reposition bisa memproses ulang tanpa upload lagi
-                        'user_input': input_filename,
+                    with open(output_tmp, 'rb') as f:
+                        storage.save_file(output_storage, f)
+                    return {
+                        'idx':           idx,
+                        'original':      user_filename,
+                        'result_url':    _storage_url(output_storage),
+                        'download_url':  f"/download/{uid}/{batch_id}/{output_filename}",
+                        'filename':      output_filename,
+                        'user_input':    input_filename,
                         'preview_input': preview_filename,
-                        'pos_x': 0.5,
-                        'pos_y': 0.5,
-                        'zoom': 1.0,
-                    })
+                        'pos_x': 0.5, 'pos_y': 0.5, 'zoom': 1.0,
+                    }
+            return None
 
+        # 3. Jalankan paralel dengan ThreadPoolExecutor (max 4-8 thread)
+        processed_files = []
+        max_workers = min(8, max(1, len(user_images)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_process_single_image, (idx, img)) for idx, img in enumerate(user_images)]
+            for future in as_completed(futures):
+                res = future.result()
+                if res:
+                    processed_files.append(res)
+
+        # Urutkan sesuai index semula
+        processed_files.sort(key=lambda x: x['idx'])
+        for pf in processed_files:
+            pf.pop('idx', None)
+
+        # 4. Buat ZIP jika > 1 gambar
         zip_url = None
-        # Buat ZIP jika diproses > 1 gambar
         if len(processed_files) > 1:
             zip_filename = f"twibbon_batch_{batch_id}.zip"
-            zip_path = os.path.join(app.config['OUTPUT_FOLDER'], uid, zip_filename)
-            with zipfile.ZipFile(zip_path, 'w') as zipf:
+            zip_storage  = f"{uid}/{zip_filename}"
+            zip_buf = io.BytesIO()
+            with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 for pf in processed_files:
-                    file_to_zip = os.path.join(session_output_path, pf['filename'])
-                    zipf.write(file_to_zip, arcname=pf['filename'])
-            zip_url = url_for('download_zip', uid=uid, zip_filename=zip_filename)
+                    data = storage.get_file(f"{session_path}/{pf['filename']}").read()
+                    zipf.writestr(pf['filename'], data)
+            zip_buf.seek(0)
+            storage.save_file(zip_storage, zip_buf)
+            zip_url = f"/download_zip/{uid}/{zip_filename}"
 
         batch_record = {
-            'uid': uid,
-            'batch_id': batch_id,
-            'created_at': datetime.now().strftime('%d %b %Y, %H:%M'),
-            'message': f'Berhasil memproses {len(processed_files)} gambar!',
+            'uid':              uid,
+            'batch_id':         batch_id,
+            'created_at':       datetime.now().strftime('%d %b %Y, %H:%M'),
+            'message':          f'Berhasil memproses {len(processed_files)} gambar!',
             'twibbon_filename': twibbon_filename,
-            'files': processed_files,
-            'zip_url': zip_url,
+            'files':            processed_files,
+            'zip_url':          zip_url,
         }
         USER_HISTORY.setdefault(uid, []).insert(0, batch_record)
+
+        # 5. Pemicu pembersihan otomatis di background (jika storage > 900MB -> bersihkan hingga 500MB)
+        trigger_async_cleanup()
 
         return jsonify(batch_record), 200
 
     except Exception as e:
+        import traceback; traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
+# ── Reposisi foto dalam twibbon ───────────────────────────────────────────────
 @app.route('/reposition', methods=['POST'])
 def reposition():
-    """Render ulang satu hasil dengan posisi crop / zoom baru, tanpa upload ulang."""
-    uid = get_uid()
+    uid  = get_uid()
     data = request.get_json(silent=True) or {}
 
     batch_id = data.get('batch_id')
     filename = data.get('filename')
-
     try:
         pos_x = min(max(float(data.get('pos_x', 0.5)), 0.0), 1.0)
         pos_y = min(max(float(data.get('pos_y', 0.5)), 0.0), 1.0)
-        zoom = min(max(float(data.get('zoom', 1.0)), 1.0), 3.0)
+        zoom  = min(max(float(data.get('zoom',  1.0)), 1.0), 3.0)
     except (TypeError, ValueError):
         return jsonify({'error': 'Parameter posisi/zoom tidak valid.'}), 400
 
@@ -178,30 +342,56 @@ def reposition():
     if not file_record:
         return jsonify({'error': 'File hasil tidak ditemukan pada sesi ini.'}), 404
 
-    session_upload_path = os.path.join(app.config['UPLOAD_FOLDER'], uid, batch_id)
-    session_output_path = os.path.join(app.config['OUTPUT_FOLDER'], uid, batch_id)
-    user_path = os.path.join(session_upload_path, file_record['user_input'])
-    twibbon_path = os.path.join(session_upload_path, batch['twibbon_filename'])
-    output_path = os.path.join(session_output_path, filename)
+    session_path  = f"{uid}/{batch_id}"
+    user_path     = f"{session_path}/{file_record['user_input']}"
+    twibbon_path  = f"{session_path}/{batch['twibbon_filename']}"
+    output_path   = f"{session_path}/{filename}"
 
-    if not os.path.exists(user_path) or not os.path.exists(twibbon_path):
-        return jsonify({'error': 'File sumber sudah tidak tersedia di server.'}), 404
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            user_tmp    = os.path.join(tmpdir, file_record['user_input'])
+            twibbon_tmp = os.path.join(tmpdir, batch['twibbon_filename'])
+            output_tmp  = os.path.join(tmpdir, filename)
 
-    success = process_twibbon(user_path, twibbon_path, output_path, zoom=zoom, pos_x=pos_x, pos_y=pos_y)
-    if not success:
-        return jsonify({'error': 'Gagal memproses ulang posisi gambar.'}), 500
+            with open(user_tmp, 'wb') as f:
+                f.write(storage.get_file(user_path).read())
+            with open(twibbon_tmp, 'wb') as f:
+                f.write(storage.get_file(twibbon_path).read())
 
-    file_record['pos_x'] = pos_x
-    file_record['pos_y'] = pos_y
-    file_record['zoom'] = zoom
+            success = process_twibbon(user_tmp, twibbon_tmp, output_tmp,
+                                      zoom=zoom, pos_x=pos_x, pos_y=pos_y, max_dimension=2048)
+            if not success:
+                return jsonify({'error': 'Gagal memproses ulang posisi gambar.'}), 500
 
-    # cache-bust supaya <img> di browser memuat ulang crop yang baru
-    download_url = url_for('download_file', uid=uid, batch_id=batch_id, filename=filename)
-    download_url += f"?v={uuid.uuid4().hex[:8]}"
+            saved_filename = filename
+            saved_output_path = output_path
+            try:
+                with open(output_tmp, 'rb') as f:
+                    storage.save_file(output_path, f)
+            except Exception as save_err:
+                print(f"[Reposition Save Fallback] {save_err}. Saving as new version...")
+                saved_filename = f"v_{uuid.uuid4().hex[:6]}_{filename}"
+                saved_output_path = f"{session_path}/{saved_filename}"
+                with open(output_tmp, 'rb') as f:
+                    storage.save_file(saved_output_path, f)
+                file_record['filename'] = saved_filename
 
-    return jsonify({'result_url': download_url, 'pos_x': pos_x, 'pos_y': pos_y, 'zoom': zoom}), 200
+        file_record.update({'pos_x': pos_x, 'pos_y': pos_y, 'zoom': zoom})
+        result_url = _storage_url(saved_output_path)
+        separator = '&' if '?' in result_url else '?'
+        result_url += f"{separator}v={uuid.uuid4().hex[:8]}"
+        download_url = f"/download/{uid}/{batch_id}/{saved_filename}"
+        file_record['result_url'] = result_url
+        file_record['download_url'] = download_url
+
+        return jsonify({'result_url': result_url, 'download_url': download_url, 'pos_x': pos_x, 'pos_y': pos_y, 'zoom': zoom}), 200
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 
+# ── Riwayat sesi ──────────────────────────────────────────────────────────────
 @app.route('/history')
 def history():
     uid = get_uid()
@@ -215,50 +405,128 @@ def clear_history():
     return jsonify({'message': 'Riwayat sesi ini sudah dihapus.'}), 200
 
 
+# ── Source files untuk editor posisi ─────────────────────────────────────────
 @app.route('/source_photo/<uid>/<batch_id>/<filename>')
 def source_photo(uid, batch_id, filename):
-    """Menyajikan foto asli/pratinjau pengguna (dipakai oleh editor posisi)."""
     if not _check_owner(uid):
         return "Akses ditolak.", 403
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], uid, batch_id, secure_filename(filename))
-    if os.path.exists(file_path):
-        return send_file(file_path)
-    return "File tidak ditemukan.", 404
+    try:
+        f = storage.get_file(f"{uid}/{batch_id}/{secure_filename(filename)}")
+        return send_file(f, mimetype='image/jpeg')
+    except FileNotFoundError:
+        return "File tidak ditemukan.", 404
 
 
 @app.route('/source_twibbon/<uid>/<batch_id>')
 def source_twibbon(uid, batch_id):
-    """Menyajikan file Twibbon asli untuk overlay di editor posisi."""
     if not _check_owner(uid):
         return "Akses ditolak.", 403
     batch = _find_batch(uid, batch_id)
     if not batch:
         return "Sesi tidak ditemukan.", 404
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], uid, batch_id, batch['twibbon_filename'])
-    if os.path.exists(file_path):
-        return send_file(file_path)
-    return "File tidak ditemukan.", 404
+    try:
+        f = storage.get_file(f"{uid}/{batch_id}/{batch['twibbon_filename']}")
+        return send_file(f, mimetype='image/png')
+    except FileNotFoundError:
+        return "File tidak ditemukan.", 404
 
 
+# ── Download langsung ─────────────────────────────────────────────────────────
 @app.route('/download/<uid>/<batch_id>/<filename>')
 def download_file(uid, batch_id, filename):
     if not _check_owner(uid):
         return "Akses ditolak.", 403
-    file_path = os.path.join(app.config['OUTPUT_FOLDER'], uid, batch_id, secure_filename(filename))
-    if os.path.exists(file_path):
-        return send_file(file_path, as_attachment=True)
-    return "File tidak ditemukan.", 404
+    try:
+        f = storage.get_file(f"{uid}/{batch_id}/{secure_filename(filename)}")
+        return send_file(f, as_attachment=True, download_name=filename)
+    except FileNotFoundError:
+        return "File tidak ditemukan.", 404
 
 
 @app.route('/download_zip/<uid>/<zip_filename>')
 def download_zip(uid, zip_filename):
     if not _check_owner(uid):
         return "Akses ditolak.", 403
-    file_path = os.path.join(app.config['OUTPUT_FOLDER'], uid, secure_filename(zip_filename))
-    if os.path.exists(file_path):
-        return send_file(file_path, as_attachment=True)
-    return "File Zip tidak ditemukan.", 404
+    try:
+        f = storage.get_file(f"{uid}/{secure_filename(zip_filename)}")
+        return send_file(f, as_attachment=True, download_name=zip_filename)
+    except FileNotFoundError:
+        return "File Zip tidak ditemukan.", 404
 
 
+# ── Hapus warna background twibbon ───────────────────────────────────────────
+@app.route('/remove_bg_color', methods=['POST'])
+def remove_bg_color():
+    try:
+        uid = get_uid()
+
+        if 'twibbon' not in request.files:
+            return jsonify({'error': 'File twibbon tidak ditemukan di request.'}), 400
+
+        twibbon_file = request.files['twibbon']
+        raw_filename = twibbon_file.filename or 'twibbon.png'
+        safe_name    = secure_filename(raw_filename) or 'twibbon.png'
+
+        color_hex = request.form.get('color', '').strip().lstrip('#')
+        if len(color_hex) != 6:
+            return jsonify({'error': 'Format warna tidak valid. Gunakan hex 6 karakter.'}), 400
+        try:
+            target_rgb = tuple(int(color_hex[i:i + 2], 16) for i in (0, 2, 4))
+        except ValueError:
+            return jsonify({'error': 'Kode warna hex tidak valid.'}), 400
+
+        try:
+            tolerance = max(0, min(int(float(request.form.get('tolerance', 30))), 150))
+        except (ValueError, TypeError):
+            tolerance = 30
+
+        img_data = twibbon_file.stream.read()
+        if not img_data:
+            return jsonify({'error': 'File twibbon kosong.'}), 400
+
+        img        = Image.open(io.BytesIO(img_data))
+        result_img = _remove_color(img, target_rgb, tolerance)
+
+        out_buf = io.BytesIO()
+        result_img.save(out_buf, 'PNG', compress_level=6, optimize=True)
+        out_buf.seek(0)
+
+        base_name    = safe_name.rsplit('.', 1)[0]
+        out_filename = f"converted_{base_name}_{uuid.uuid4().hex[:6]}.png"
+        storage_path = f"{uid}/converted/{out_filename}"
+
+        storage.save_file(storage_path, out_buf)
+        converted_url = _storage_url(storage_path)
+
+        trigger_async_cleanup()
+
+        return jsonify({
+            'converted_url': converted_url,
+            'filename':      out_filename,
+            'storage_path':  storage_path,
+        }), 200
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': f'Gagal memproses gambar: {str(e)}'}), 500
+
+
+@app.route('/converted_twibbon/<uid>/<filename>')
+def serve_converted_twibbon(uid, filename):
+    if not _check_owner(uid):
+        return "Akses ditolak.", 403
+    try:
+        f = storage.get_file(f"{uid}/converted/{secure_filename(filename)}")
+        return send_file(f, mimetype='image/png')
+    except FileNotFoundError:
+        return "File tidak ditemukan.", 404
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 if __name__ == '__main__':
-    app.run(debug=True, port=8000)
+    port = int(os.environ.get('PORT', 8000))
+    debug = os.environ.get('FLASK_DEBUG', 'true').lower() == 'true'
+    print(f"\n[OK] Auto-Twibbon Studio berjalan di http://localhost:{port}")
+    print(f"     Storage : {STORAGE_TYPE.upper()}")
+    print(f"     Debug   : {debug}\n")
+    app.run(debug=debug, port=port)

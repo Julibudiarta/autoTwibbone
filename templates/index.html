@@ -158,6 +158,67 @@
             .confetti-field span{ animation: none; }
             .result-card, .btn-primary, .dropzone{ transition: none; }
         }
+
+        /* ── Color Remover ── */
+        #colorPickerCanvas { display:block; image-rendering:pixelated; }
+
+        .color-swatch {
+            width: 32px; height: 32px;
+            border-radius: 50%;
+            border: 3px solid white;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.22);
+            cursor: pointer;
+            position: relative;
+            transition: transform .15s ease;
+            flex-shrink: 0;
+        }
+        .color-swatch:hover { transform: scale(1.15); }
+        .color-swatch.active-swatch { box-shadow: 0 0 0 3px var(--coral), 0 2px 8px rgba(0,0,0,0.22); }
+
+        .swatch-remove {
+            position: absolute; top: -6px; right: -6px;
+            width: 16px; height: 16px;
+            background: var(--coral); color: white;
+            border-radius: 50%; font-size: 10px; line-height: 16px;
+            text-align: center; cursor: pointer; font-weight: 800;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+            display: none;
+        }
+        .color-swatch:hover .swatch-remove { display: block; }
+
+        #eyedropperToggle.active {
+            background: var(--plum) !important;
+            color: var(--marigold) !important;
+        }
+
+        /* Checkerboard bg for canvas container (transparency indicator) */
+        .checkerboard {
+            background-image:
+                linear-gradient(45deg,#bbb 25%,transparent 25%),
+                linear-gradient(-45deg,#bbb 25%,transparent 25%),
+                linear-gradient(45deg,transparent 75%,#bbb 75%),
+                linear-gradient(-45deg,transparent 75%,#bbb 75%);
+            background-size: 16px 16px;
+            background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+            background-color: #e8e8e8;
+        }
+
+        #toleranceSlider {
+            -webkit-appearance: none;
+            height: 6px;
+            border-radius: 3px;
+            background: linear-gradient(to right, var(--coral) 0%, var(--coral) var(--pct,25%), #E7DFC9 var(--pct,25%), #E7DFC9 100%);
+            outline: none;
+        }
+        #toleranceSlider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px; height: 18px;
+            border-radius: 50%;
+            background: var(--coral);
+            cursor: pointer;
+            border: 3px solid white;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+        }
     </style>
 </head>
 <body class="min-h-screen antialiased relative">
@@ -199,19 +260,28 @@
                 <div class="flex flex-col">
                     <label class="flex items-center gap-2 text-base font-semibold mb-3" style="color:var(--ink)">
                         <span class="step-badge">1</span>
-                        Pilih Twibbon (PNG)
+                        Pilih Twibbon
                     </label>
                     <div id="drop-twibbon" class="dropzone frame-corners relative rounded-2xl flex flex-col items-center justify-center p-6 text-center cursor-pointer h-60 md:h-64">
                         <span class="corner-bl"></span><span class="corner-br"></span>
-                        <input type="file" id="twibbonFile" name="twibbon" accept="image/png" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10">
+                        <input type="file" id="twibbonFile" name="twibbon" accept="image/*" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10">
                         <svg class="w-11 h-11 mb-3" style="color:var(--coral)" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
-                        <p class="font-semibold z-0" style="color:var(--ink)">Tarik &amp; lepas file PNG</p>
-                        <p class="text-sm mt-1 z-0" style="color:var(--ink-muted)">atau klik untuk menelusuri</p>
-                        <div id="twibbon-preview" class="hidden absolute inset-0 w-full h-full p-3 rounded-2xl z-20 flex flex-col justify-center items-center" style="background:var(--paper-dim)">
-                            <span id="twibbon-name" class="font-mono text-xs font-semibold mb-3 break-all text-center px-2" style="color:var(--plum)"></span>
-                            <button type="button" id="clear-twibbon" class="text-xs font-semibold px-4 py-1.5 rounded-full transition" style="background:#FCE4DF; color:var(--coral)">Ganti File</button>
+                        <p class="font-semibold z-0" style="color:var(--ink)">Tarik &amp; lepas file Twibbon</p>
+                        <p class="text-sm mt-1 z-0" style="color:var(--ink-muted)">PNG, JPG, atau format lainnya</p>
+                        <div id="twibbon-preview" class="hidden absolute inset-0 w-full h-full p-3 rounded-2xl z-20 flex flex-col justify-center items-center gap-2" style="background:var(--paper-dim)">
+                            <span id="twibbon-name" class="font-mono text-xs font-semibold break-all text-center px-2" style="color:var(--plum)"></span>
+                            <!-- Badge: muncul kalau bukan PNG -->
+                            <span id="twibbon-non-png-badge" class="hidden font-mono text-xs font-bold px-3 py-1 rounded-full" style="background:#FEF3C7; color:#92400E;">⚠ Bukan PNG</span>
+                            <div class="flex gap-2 flex-wrap justify-center">
+                                <button type="button" id="clear-twibbon" class="text-xs font-semibold px-4 py-1.5 rounded-full transition" style="background:#FCE4DF; color:var(--coral)">Ganti File</button>
+                                <button type="button" id="open-color-remover-btn" class="hidden text-xs font-semibold px-4 py-1.5 rounded-full transition" style="background:var(--plum); color:var(--marigold)">✂ Hapus Warna</button>
+                            </div>
                         </div>
                     </div>
+                    <!-- Info hint: selalu muncul -->
+                    <p id="twibbon-hint" class="mt-2 text-xs hidden" style="color:var(--ink-muted)">
+                        💡 Twibbon non-PNG? Klik <strong>Hapus Warna</strong> untuk menghapus warna background dan mengubahnya menjadi PNG transparan.
+                    </p>
                 </div>
 
                 <!-- User Photos Area -->
@@ -314,6 +384,112 @@
             </div>
         </div>
     </div>
+
+    <!-- Color Remover Modal -->
+    <div id="colorRemoverOverlay" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" style="background:rgba(23,10,34,0.82)">
+        <div class="studio-card w-full p-6 overflow-y-auto" style="max-width:520px; max-height:92vh; color:var(--ink)">
+
+            <!-- Header -->
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="font-display text-xl font-bold" style="color:var(--ink)">✂ Hapus Warna Twibbon</h3>
+                <button id="colorRemoverClose" type="button" class="text-2xl leading-none" style="color:var(--ink-muted)" aria-label="Tutup">&times;</button>
+            </div>
+            <p class="text-xs mb-4" style="color:var(--ink-muted)">
+                Klik area gambar untuk memilih warna yang ingin dihapus, atau ketik kode warna langsung. Warna yang dipilih akan dibuat transparan.
+            </p>
+
+            <!-- Canvas preview area -->
+            <div class="relative rounded-xl overflow-hidden mb-4 flex items-center justify-center select-none"
+                 style="background: repeating-caret-color transparent;
+                        background-image: linear-gradient(45deg,#ccc 25%,transparent 25%),
+                            linear-gradient(-45deg,#ccc 25%,transparent 25%),
+                            linear-gradient(45deg,transparent 75%,#ccc 75%),
+                            linear-gradient(-45deg,transparent 75%,#ccc 75%);
+                        background-size:16px 16px;
+                        background-position:0 0,0 8px,8px -8px,-8px 0;
+                        background-color:#eee;
+                        min-height:200px; cursor:crosshair;">
+                <canvas id="colorPickerCanvas" class="block max-w-full" style="max-height:320px; cursor:crosshair;"></canvas>
+                <!-- Crosshair cursor indicator -->
+                <div id="colorCursorDot" class="pointer-events-none absolute w-5 h-5 rounded-full border-2 border-white shadow-lg hidden" style="transform:translate(-50%,-50%); mix-blend-mode:difference;"></div>
+            </div>
+
+            <!-- Eyedropper mode toggle + zoom hint -->
+            <div class="flex items-center gap-3 mb-4 flex-wrap">
+                <button id="eyedropperToggle" type="button"
+                    class="flex items-center gap-2 text-xs font-bold px-4 py-2 rounded-full border-2 transition"
+                    style="border-color:var(--plum); background:transparent; color:var(--plum)">
+                    <span id="eyedropperIcon">🔍</span>
+                    <span id="eyedropperLabel">Mode Pilih Warna</span>
+                </button>
+                <span class="text-xs" style="color:var(--ink-muted)">Klik gambar untuk ambil warna</span>
+            </div>
+
+            <!-- Selected colors row (like Canva swatches) -->
+            <div class="mb-4">
+                <p class="text-xs font-semibold mb-2" style="color:var(--ink)">Warna Dipilih</p>
+                <div id="colorSwatches" class="flex flex-wrap gap-2 items-center min-h-[36px]">
+                    <span id="noColorMsg" class="text-xs" style="color:var(--ink-muted)">Belum ada warna dipilih</span>
+                </div>
+            </div>
+
+            <!-- Manual hex input + add button -->
+            <div class="flex gap-2 items-center mb-5">
+                <div class="relative flex-1">
+                    <span id="hexPreviewDot" class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full border border-gray-300 inline-block" style="background:#ffffff;"></span>
+                    <input id="hexColorInput" type="text" maxlength="7" placeholder="#00FF00"
+                        class="w-full pl-10 pr-3 py-2 rounded-xl border text-sm font-mono outline-none focus:ring-2"
+                        style="border-color:#D9CEB8; background:var(--paper-dim); color:var(--ink); focus:ring-color:var(--coral);">
+                </div>
+                <input id="nativeColorInput" type="color" value="#00ff00"
+                    class="w-10 h-10 rounded-xl border cursor-pointer p-0.5"
+                    style="border-color:#D9CEB8; background:var(--paper-dim);"
+                    title="Pilih warna dengan color picker">
+                <button id="addColorBtn" type="button"
+                    class="text-xs font-bold px-4 py-2 rounded-xl transition"
+                    style="background:var(--plum); color:var(--paper)">+ Tambah</button>
+            </div>
+
+            <!-- Tolerance slider -->
+            <div class="mb-5">
+                <div class="flex justify-between items-center mb-1">
+                    <label class="text-xs font-semibold" style="color:var(--ink)">Toleransi Warna</label>
+                    <span id="toleranceValue" class="font-mono text-xs font-bold" style="color:var(--plum)">30</span>
+                </div>
+                <input id="toleranceSlider" type="range" min="5" max="120" step="1" value="30" class="w-full">
+                <div class="flex justify-between text-xs mt-1" style="color:var(--ink-muted)">
+                    <span>Presisi tinggi</span>
+                    <span>Area lebar</span>
+                </div>
+            </div>
+
+            <!-- Preview result toggle -->
+            <div class="flex items-center gap-3 mb-5">
+                <button id="previewRemoveBtn" type="button"
+                    class="flex-1 text-sm font-semibold py-2 rounded-full border-2 transition"
+                    style="border-color:var(--coral); color:var(--coral); background:transparent;">
+                    👁 Pratinjau Hasil
+                </button>
+                <button id="resetPreviewBtn" type="button"
+                    class="text-sm font-semibold py-2 px-4 rounded-full transition"
+                    style="background:var(--paper-dim); color:var(--ink-muted);">
+                    Reset
+                </button>
+            </div>
+
+            <!-- Status message -->
+            <div id="colorRemoverStatus" class="hidden text-xs font-semibold text-center py-2 px-3 rounded-xl mb-4"></div>
+
+            <!-- Apply button -->
+            <button id="applyColorRemoveBtn" type="button"
+                class="btn-primary w-full text-white font-bold py-3 rounded-full text-sm">
+                ✅ Terapkan &amp; Gunakan sebagai Twibbon
+            </button>
+        </div>
+    </div>
+
+    <!-- Hidden canvas for color processing (off-screen) -->
+    <canvas id="offscreenCanvas" class="hidden"></canvas>
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>

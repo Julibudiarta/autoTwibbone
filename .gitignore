@@ -16,3 +16,12 @@ output/*
 # ==========================
 uploads/*
 !uploads/.gitkeep
+
+storage/*
+!storage/.gitkeep
+
+.venv/*
+.env
+.vercel
+
+_test_app.py

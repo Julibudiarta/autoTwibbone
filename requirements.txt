@@ -2,4 +2,8 @@ Flask==3.0.2
 Pillow==10.2.0
 Werkzeug==3.0.1
 pillow-heif==0.15.0
-supabase==2.4.0
+supabase==2.31.0
+websockets==17.0.1
+httpx==0.28.1
+numpy>=1.26.0
+python-dotenv==1.2.3

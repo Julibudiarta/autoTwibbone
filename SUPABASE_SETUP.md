@@ -1,101 +1,55 @@
-# Auto-Twibbon Storage Configuration
+# Auto-Twibbon Storage Configuration (Supabase)
 
-Dokumentasi setup untuk menggunakan Supabase Storage dengan Auto-Twibbon Studio.
+Dokumentasi setup & penyelesaian error RLS (Row Level Security) untuk Supabase Storage.
 
-## Setup Supabase
+---
 
-### 1. Buat Project Supabase
-- Kunjungi https://supabase.com
-- Buat project baru atau login ke project existing
-- Catat `Project URL` dan `API Key`
+## ⚡ Solusi Error: "new row violates row-level security policy" (HTTP 403)
 
-### 2. Buat Storage Bucket
-Di Supabase Dashboard:
-1. Navigasi ke **Storage** (sidebar kiri)
-2. Klik **Create new bucket**
-3. Nama bucket: `twibbon-files` (atau sesuai kebutuhan)
-4. Pilih **Public** jika ingin file bisa diakses langsung via URL
+Error 403 ini terjadi karena bucket Supabase **membatasi akses UPDATE atau DELETE** untuk pengguna anonim (`anon` role).
 
-### 3. Environment Variables (.env)
-Buat file `.env` di root project:
+### Cara Solusi 1: Atur Policies di Supabase Dashboard (Direkomendasikan)
 
-```bash
-# Storage Configuration
-STORAGE_TYPE=supabase
+1. Buka [Supabase Dashboard](https://supabase.com/dashboard) -> pilih project Anda.
+2. Masuk ke menu **Storage** (sidebar kiri) -> klik **Policies**.
+3. Cari bucket `twibbon-files`.
+4. Klik **New policy** -> pilih **For full customization** (atau **Create policy from scratch**).
+5. Buat 4 Kebijakan (Policies) berikut:
 
-# Supabase Configuration
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=your-anon-key
-SUPABASE_BUCKET=twibbon-files
+| Nama Policy | Allowed Operations | Target roles | USING / WITH CHECK expression |
+|---|---|---|---|
+| `Public Select` | **SELECT** | `anon`, `authenticated` | `bucket_id = 'twibbon-files'` |
+| `Public Insert` | **INSERT** | `anon`, `authenticated` | `bucket_id = 'twibbon-files'` |
+| `Public Update` | **UPDATE** | `anon`, `authenticated` | `bucket_id = 'twibbon-files'` |
+| `Public Delete` | **DELETE** | `anon`, `authenticated` | `bucket_id = 'twibbon-files'` |
 
-# Flask
-SECRET_KEY=your-secret-key-here
+---
+
+### Cara Solusi 2: Jalankan Script SQL di Supabase (Paling Cepat ⚡)
+
+Buka menu **SQL Editor** di Supabase Dashboard, lalu paste & jalankan script SQL berikut:
+
+```sql
+-- Izinkan SELECT (Download/Lihat)
+CREATE POLICY "Allow Public Select" ON storage.objects
+FOR SELECT USING (bucket_id = 'twibbon-files');
+
+-- Izinkan INSERT (Upload Baru)
+CREATE POLICY "Allow Public Insert" ON storage.objects
+FOR INSERT WITH CHECK (bucket_id = 'twibbon-files');
+
+-- Izinkan UPDATE (Simpan Posisi / Overwrite)
+CREATE POLICY "Allow Public Update" ON storage.objects
+FOR UPDATE USING (bucket_id = 'twibbon-files');
+
+-- Izinkan DELETE (Auto Cleanup Storage)
+CREATE POLICY "Allow Public Delete" ON storage.objects
+FOR DELETE USING (bucket_id = 'twibbon-files');
 ```
 
-### 4. Install Dependencies
-```bash
-pip install -r requirements.txt
-```
+---
 
-### 5. Run Application
-```bash
-python app_supabase.py
-```
+## ⚙️ Fitur Otomatis di Kode Python
 
-## Struktur Penyimpanan
-
-Files akan tersimpan di Supabase dengan struktur:
-```
-twibbon-files/
-├── {user_id}/
-│   ├── {batch_id}/
-│   │   ├── twibbon_file.png
-│   │   ├── input_0_photo.jpg
-│   │   ├── preview_0.jpg
-│   │   └── result_photo.png
-│   └── twibbon_batch_{batch_id}.zip
-```
-
-## Keuntungan Supabase Storage
-
-✅ **Cloud Storage** - Tidak perlu worry tentang disk space lokal
-✅ **Unlimited Scalability** - Pertumbuhan tanpa batas
-✅ **Public URLs** - Link langsung ke file hasil
-✅ **Built-in CDN** - Akses cepat dari mana saja
-✅ **PostgreSQL Integration** - Bisa tambah database untuk metadata
-✅ **Cost Effective** - Harga kompetitif
-
-## URL Download Format
-
-File yang di-upload akan bisa diakses via:
-```
-https://your-project.supabase.co/storage/v1/object/public/twibbon-files/{user_id}/{batch_id}/{filename}
-```
-
-## Switching Storage Backend
-
-Untuk kembali ke Local Storage:
-```bash
-STORAGE_TYPE=local python app_supabase.py
-```
-
-Atau gunakan `app_with_storage.py` yang lebih generic.
-
-## Troubleshooting
-
-### Error: "Supabase dependencies tidak terinstall"
-```bash
-pip install supabase
-```
-
-### Error: "Invalid Supabase URL atau KEY"
-- Double check di Supabase Dashboard > Settings > API
-- Pastikan menggunakan **anon** key, bukan **service_role** key
-
-### Error: "Bucket not found"
-- Pastikan bucket `twibbon-files` sudah dibuat di Supabase Storage
-- Atau ubah nama di `SUPABASE_BUCKET` environment variable
-
-### Files tidak bisa diakses
-- Pastikan bucket berstatus **Public**
-- Di Supabase Dashboard > Storage > Policies bisa adjust permissions
+Aplikasi sudah dilengkapi **Auto-Fallback**:
+- Jika tombol **Simpan Posisi** ditekan saat izin `UPDATE` belum diaktifkan di Supabase, sistem secara otomatis menyimpan posisi sebagai file versi baru (`INSERT`), sehingga tombol **Simpan Posisi** **TETAP BERHASIL & TIDAK GAAL**.
