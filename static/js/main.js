@@ -403,15 +403,17 @@
   function renderCanvasReposition(userImg, twibbonImg, posX, posY, zoom) {
     return new Promise((resolve, reject) => {
       try {
-        const W = twibbonImg.naturalWidth || 1080;
-        const H = twibbonImg.naturalHeight || 1080;
-        const uW = userImg.naturalWidth || 1080;
-        const uH = userImg.naturalHeight || 1080;
+        const W = twibbonImg.naturalWidth || 2048;
+        const H = twibbonImg.naturalHeight || 2048;
+        const uW = userImg.naturalWidth || 2048;
+        const uH = userImg.naturalHeight || 2048;
 
         const canvas = document.createElement('canvas');
         canvas.width = W;
         canvas.height = H;
         const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
 
         const wRatio = W / uW;
         const hRatio = H / uH;
@@ -430,7 +432,8 @@
         ctx.drawImage(userImg, left, top, targetW, targetH);
         ctx.drawImage(twibbonImg, 0, 0, W, H);
 
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+        // Export sebagai PNG Lossless Full HD jernih
+        const dataUrl = canvas.toDataURL('image/png');
         resolve(dataUrl);
       } catch (err) {
         reject(err);
