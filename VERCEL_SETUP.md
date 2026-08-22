@@ -12,7 +12,7 @@ Karena Vercel menggunakan Serverless Functions (tanpa penyimpanan harddisk perma
   2. `STORAGE_TYPE=supabase` (Jika ingin file tersimpan di cloud Supabase).
 
 ---
-
+---
 ## 🚀 Cara 1: Deploy via GitHub (Sangat Mudah & Otomatis)
 
 1. Push repository project Anda ke GitHub:
