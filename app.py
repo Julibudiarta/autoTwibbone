@@ -109,14 +109,39 @@ def _find_batch(uid: str, batch_id: str) -> dict | None:
     return next((b for b in USER_HISTORY.get(uid, []) if b['batch_id'] == batch_id), None)
 
 
+def _guess_mime(filename: str) -> str:
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+    return {
+        'png': 'image/png',
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'gif': 'image/gif',
+        'webp': 'image/webp',
+        'zip': 'application/zip',
+    }.get(ext, 'image/png')
+
+
 def _storage_url(path: str) -> str:
     """
     Kembalikan URL yang bisa dibuka browser untuk file di storage.
-      - Supabase : public URL dari bucket
+      - Browser  : data:image/png;base64,... (instan & 100% bebas serverless state Vercel!)
+      - Supabase : public URL dari bucket Supabase
       - Local    : route internal Flask /serve/<path>
     """
+    if STORAGE_TYPE in ('browser', 'memory', 'ram', 'temp'):
+        try:
+            file_buf = storage.get_file(path)
+            data_bytes = file_buf.read()
+            mime = _guess_mime(path)
+            b64_str = base64.b64encode(data_bytes).decode('utf-8')
+            return f"data:{mime};base64,{b64_str}"
+        except Exception as e:
+            print(f"[b64 storage_url error] {e}")
+            return f"/serve/{path}"
+
     if STORAGE_TYPE == 'supabase':
         return storage.get_download_url(path)
+
     return f"/serve/{path}"
 
 
@@ -204,12 +229,10 @@ def handle_upload():
         twibbon_filename = secure_filename(twibbon_file.filename) or 'twibbon.png'
         twibbon_storage  = f"{session_path}/{twibbon_filename}"
         
-        # Pre-compress twibbon jika perlu
         optimized_twibbon_buf = optimize_image(twibbon_file.stream, max_dimension=2048)
         storage.save_file(twibbon_storage, optimized_twibbon_buf)
-
-        # Download twibbon byte sekali untuk seluruh thread
         twibbon_bytes = storage.get_file(twibbon_storage).read()
+        twibbon_url   = _storage_url(twibbon_storage)
 
         # 2. Fungsi worker paralel per foto pengguna
         def _process_single_image(idx_and_user_image):
@@ -227,15 +250,16 @@ def handle_upload():
 
             # Buat preview JPEG kecil untuk editor posisi
             preview_filename = f"preview_{idx}.jpg"
+            preview_storage  = f"{session_path}/{preview_filename}"
             try:
                 opt_user_buf.seek(0)
                 with Image.open(opt_user_buf) as src_im:
                     preview_buf = io.BytesIO()
                     src_im.convert("RGB").save(preview_buf, "JPEG", quality=80, optimize=True)
                     preview_buf.seek(0)
-                    storage.save_file(f"{session_path}/{preview_filename}", preview_buf)
+                    storage.save_file(preview_storage, preview_buf)
             except Exception:
-                preview_filename = None
+                preview_storage = user_storage
 
             # Render hasil overlay twibbon
             file_root       = user_filename.rsplit('.', 1)[0]
@@ -257,11 +281,17 @@ def handle_upload():
                 if success:
                     with open(output_tmp, 'rb') as f:
                         storage.save_file(output_storage, f)
+                    
+                    res_url  = _storage_url(output_storage)
+                    dl_url   = res_url if res_url.startswith('data:') else f"/download/{uid}/{batch_id}/{output_filename}"
+                    prev_url = _storage_url(preview_storage)
+
                     return {
                         'idx':           idx,
                         'original':      user_filename,
-                        'result_url':    _storage_url(output_storage),
-                        'download_url':  f"/download/{uid}/{batch_id}/{output_filename}",
+                        'result_url':    res_url,
+                        'download_url':  dl_url,
+                        'preview_url':   prev_url,
                         'filename':      output_filename,
                         'user_input':    input_filename,
                         'preview_input': preview_filename,
@@ -296,7 +326,7 @@ def handle_upload():
                     zipf.writestr(pf['filename'], data)
             zip_buf.seek(0)
             storage.save_file(zip_storage, zip_buf)
-            zip_url = f"/download_zip/{uid}/{zip_filename}"
+            zip_url = _storage_url(zip_storage) if STORAGE_TYPE in ('browser', 'memory', 'ram') else f"/download_zip/{uid}/{zip_filename}"
 
         batch_record = {
             'uid':              uid,
@@ -304,6 +334,7 @@ def handle_upload():
             'created_at':       datetime.now().strftime('%d %b %Y, %H:%M'),
             'message':          f'Berhasil memproses {len(processed_files)} gambar!',
             'twibbon_filename': twibbon_filename,
+            'twibbon_url':      twibbon_url,
             'files':            processed_files,
             'zip_url':          zip_url,
         }
@@ -378,9 +409,13 @@ def reposition():
 
         file_record.update({'pos_x': pos_x, 'pos_y': pos_y, 'zoom': zoom})
         result_url = _storage_url(saved_output_path)
-        separator = '&' if '?' in result_url else '?'
-        result_url += f"{separator}v={uuid.uuid4().hex[:8]}"
-        download_url = f"/download/{uid}/{batch_id}/{saved_filename}"
+        if not result_url.startswith('data:'):
+            separator = '&' if '?' in result_url else '?'
+            result_url += f"{separator}v={uuid.uuid4().hex[:8]}"
+            download_url = f"/download/{uid}/{batch_id}/{saved_filename}"
+        else:
+            download_url = result_url
+
         file_record['result_url'] = result_url
         file_record['download_url'] = download_url
 

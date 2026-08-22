@@ -275,8 +275,8 @@
     };
 
     const previewName = file.preview_input || file.user_input;
-    editorPhoto.src = `/source_photo/${batch.uid}/${batch.batch_id}/${previewName}`;
-    editorFrame.src = `/source_twibbon/${batch.uid}/${batch.batch_id}`;
+    editorPhoto.src = file.preview_url || `/source_photo/${batch.uid}/${batch.batch_id}/${previewName}`;
+    editorFrame.src = batch.twibbon_url || `/source_twibbon/${batch.uid}/${batch.batch_id}`;
     editorZoom.value = editorState.zoom;
     editorStatus.classList.add('hidden');
 
