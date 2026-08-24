@@ -272,9 +272,13 @@
                             <span id="twibbon-name" class="font-mono text-xs font-semibold break-all text-center px-2" style="color:var(--plum)"></span>
                             <!-- Badge: muncul kalau bukan PNG -->
                             <span id="twibbon-non-png-badge" class="hidden font-mono text-xs font-bold px-3 py-1 rounded-full" style="background:#FEF3C7; color:#92400E;">⚠ Bukan PNG</span>
-                            <div class="flex gap-2 flex-wrap justify-center">
+                            <div class="flex gap-2 flex-wrap justify-center items-center">
                                 <button type="button" id="clear-twibbon" class="text-xs font-semibold px-4 py-1.5 rounded-full transition" style="background:#FCE4DF; color:var(--coral)">Ganti File</button>
                                 <button type="button" id="open-color-remover-btn" class="hidden text-xs font-semibold px-4 py-1.5 rounded-full transition" style="background:var(--plum); color:var(--marigold)">✂ Hapus Warna</button>
+                                <a id="download-converted-twibbon-btn" href="#" download class="hidden text-xs font-semibold px-4 py-1.5 rounded-full transition inline-flex items-center gap-1.5 shadow-sm" style="background:#10B981; color:#FFFFFF; text-decoration:none;">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                                    Download PNG
+                                </a>
                             </div>
                         </div>
                     </div>
@@ -480,11 +484,19 @@
             <!-- Status message -->
             <div id="colorRemoverStatus" class="hidden text-xs font-semibold text-center py-2 px-3 rounded-xl mb-4"></div>
 
-            <!-- Apply button -->
-            <button id="applyColorRemoveBtn" type="button"
-                class="btn-primary w-full text-white font-bold py-3 rounded-full text-sm">
-                ✅ Terapkan &amp; Gunakan sebagai Twibbon
-            </button>
+            <!-- Apply button & Download button -->
+            <div class="flex gap-2 flex-col sm:flex-row">
+                <button id="applyColorRemoveBtn" type="button"
+                    class="btn-primary flex-1 text-white font-bold py-3 rounded-full text-sm">
+                    ✅ Terapkan &amp; Gunakan sebagai Twibbon
+                </button>
+                <a id="downloadModalConvertedBtn" href="#" download
+                    class="hidden text-xs font-semibold px-4 py-3 rounded-full transition inline-flex items-center justify-center gap-1.5 text-center shadow-sm"
+                    style="background:#10B981; color:#FFFFFF; text-decoration:none;">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                    Download PNG
+                </a>
+            </div>
         </div>
     </div>
 

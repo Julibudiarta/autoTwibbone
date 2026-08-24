@@ -588,7 +588,8 @@ def serve_converted_twibbon(uid, filename):
         return "Akses ditolak.", 403
     try:
         f = storage.get_file(f"{uid}/converted/{secure_filename(filename)}")
-        return send_file(f, mimetype='image/png')
+        as_attachment = request.args.get('download', '0') == '1'
+        return send_file(f, mimetype='image/png', as_attachment=as_attachment, download_name=filename if as_attachment else None)
     except FileNotFoundError:
         return "File tidak ditemukan.", 404
 
