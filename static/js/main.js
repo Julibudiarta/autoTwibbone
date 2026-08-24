@@ -10,6 +10,8 @@
   const clearTwibbonBtn = $('clear-twibbon');
   const nonPngBadge = $('twibbon-non-png-badge');
   const openColorRemoverBtn = $('open-color-remover-btn');
+  const downloadConvertedTwibbonBtn = $('download-converted-twibbon-btn');
+  const downloadModalConvertedBtn = $('downloadModalConvertedBtn');
   const twibbonHint = $('twibbon-hint');
 
   const userFilesInput = $('userFiles');
@@ -175,6 +177,8 @@
     crState.convertedUrl = null;
     crState.convertedFilename = null;
     crState.convertedStoragePath = null;
+    if (downloadConvertedTwibbonBtn) downloadConvertedTwibbonBtn.classList.add('hidden');
+    if (downloadModalConvertedBtn) downloadModalConvertedBtn.classList.add('hidden');
   });
 
   clearTwibbonBtn.addEventListener('click', (e) => {
@@ -184,6 +188,8 @@
     nonPngBadge.classList.add('hidden');
     openColorRemoverBtn.classList.add('hidden');
     twibbonHint.classList.add('hidden');
+    if (downloadConvertedTwibbonBtn) downloadConvertedTwibbonBtn.classList.add('hidden');
+    if (downloadModalConvertedBtn) downloadModalConvertedBtn.classList.add('hidden');
     if (twibbonThumbEl) { twibbonThumbEl.src = ''; }
     crState.originalFile = null;
     crState.convertedBlob = null;
@@ -979,13 +985,26 @@
       };
       previewImg.src = crState.convertedUrl;
 
-      // Update twibbon dropzone badge
+      // Update twibbon dropzone badge & thumbnail
       twibbonName.textContent = lastData.filename;
       nonPngBadge.classList.add('hidden');
       twibbonHint.classList.add('hidden');
+      if (twibbonThumbEl) twibbonThumbEl.src = crState.convertedUrl;
+
+      // Enable download button(s) for the converted transparent PNG
+      if (downloadConvertedTwibbonBtn) {
+        downloadConvertedTwibbonBtn.href = crState.convertedUrl;
+        downloadConvertedTwibbonBtn.download = crState.convertedFilename || 'twibbon_transparent.png';
+        downloadConvertedTwibbonBtn.classList.remove('hidden');
+      }
+      if (downloadModalConvertedBtn) {
+        downloadModalConvertedBtn.href = crState.convertedUrl;
+        downloadModalConvertedBtn.download = crState.convertedFilename || 'twibbon_transparent.png';
+        downloadModalConvertedBtn.classList.remove('hidden');
+      }
 
       const colorCount = crState.colors.length;
-      crShowStatus(`✅ Berhasil! ${colorCount} warna dihapus. Tutup modal untuk lanjut proses twibbon.`, false);
+      crShowStatus(`✅ Berhasil! ${colorCount} warna dihapus. Twibbon PNG transparan siap digunakan / diunduh.`, false);
 
       // Reset swatch selection so user can add more colors if needed
       // but keep them visible so they know what was applied
