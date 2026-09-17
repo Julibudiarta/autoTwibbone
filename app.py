@@ -235,7 +235,7 @@ def handle_upload():
         # Pertahankan 100% ukuran asli tanpa resize sama sekali
         MAX_DIM = None
 
-        optimized_twibbon_buf = optimize_image(twibbon_file.stream, max_dimension=MAX_DIM)
+        optimized_twibbon_buf = optimize_image(io.BytesIO(twibbon_file.read()), max_dimension=MAX_DIM)
         optimized_twibbon_buf.seek(0)
         twibbon_bytes = optimized_twibbon_buf.read()
 
@@ -243,26 +243,50 @@ def handle_upload():
             b64_twibbon = base64.b64encode(twibbon_bytes).decode('utf-8')
             twibbon_url = f"data:image/png;base64,{b64_twibbon}"
         else:
+            optimized_twibbon_buf.seek(0)   # reset setelah .read() di atas
             storage.save_file(twibbon_storage, optimized_twibbon_buf)
             twibbon_url = _storage_url(twibbon_storage)
 
-        # 2. Fungsi worker paralel per foto pengguna
-        def _process_single_image(idx_and_user_image):
-            idx, user_image = idx_and_user_image
+        # 2. Baca SEMUA bytes di main thread sebelum masuk executor.
+        #    Werkzeug's SpooledTemporaryFile sudah habis dibaca setelah multipart
+        #    parsing — pakai user_image.read() (FileStorage method) lalu seek(0)
+        #    sebagai safety net, BUKAN user_image.stream.read() langsung.
+        user_image_data = []  # list of (idx, filename, bytes)
+        for idx, user_image in enumerate(user_images):
             if not user_image or not user_image.filename:
+                continue
+            try:
+                user_image.stream.seek(0)
+            except Exception:
+                pass
+            raw_bytes = user_image.read()   # FileStorage.read() — selalu dapat bytes penuh
+            if not raw_bytes:
+                # Fallback: coba stream langsung setelah seek
+                try:
+                    user_image.stream.seek(0)
+                    raw_bytes = user_image.stream.read()
+                except Exception:
+                    raw_bytes = b''
+            if raw_bytes:
+                user_image_data.append((idx, secure_filename(user_image.filename), raw_bytes))
+
+        # 3. Fungsi worker paralel per foto pengguna
+        def _process_single_image(item):
+            idx, user_filename, raw_bytes = item
+            if not raw_bytes:
                 return None
 
-            user_filename  = secure_filename(user_image.filename)
             input_filename = f"input_{idx}_{user_filename}"
 
             # Optimasi foto pengguna (100% ukuran & ketajaman asli)
-            opt_user_buf = optimize_image(user_image.stream, max_dimension=MAX_DIM)
+            opt_user_buf = optimize_image(io.BytesIO(raw_bytes), max_dimension=MAX_DIM)
             opt_user_buf.seek(0)
             user_bytes = opt_user_buf.read()
 
             # Simpan ke storage hanya jika bukan mode browser
             if not IS_BROWSER_MODE:
                 user_storage = f"{session_path}/{input_filename}"
+                opt_user_buf.seek(0)   # reset setelah .read() di atas
                 storage.save_file(user_storage, opt_user_buf)
 
             # Buat Data URL resolusi tinggi untuk preview editor posisi
@@ -273,6 +297,7 @@ def handle_upload():
             else:
                 preview_b64_url = None
                 try:
+                    opt_user_buf.seek(0)   # reset lagi untuk simpan preview
                     storage.save_file(preview_storage, opt_user_buf)
                 except Exception as e:
                     print(f"[preview error] {e}")
@@ -284,8 +309,10 @@ def handle_upload():
             output_storage  = f"{session_path}/{output_filename}"
 
             with tempfile.TemporaryDirectory() as tmpdir:
-                user_tmp    = os.path.join(tmpdir, input_filename)
-                twibbon_tmp = os.path.join(tmpdir, twibbon_filename)
+                # user_bytes sudah PNG (hasil optimize_image) — simpan sebagai .png
+                # agar tidak ada ambiguitas format saat process_twibbon membuka file
+                user_tmp    = os.path.join(tmpdir, 'user_input.png')
+                twibbon_tmp = os.path.join(tmpdir, 'twibbon_frame.png')
                 out_fname   = f"result_{file_root}.png"
                 output_tmp  = os.path.join(tmpdir, out_fname)
 
@@ -322,11 +349,11 @@ def handle_upload():
                     }
             return None
 
-        # 3. Jalankan paralel dengan ThreadPoolExecutor (max 4-8 thread)
+        # 4. Jalankan paralel dengan ThreadPoolExecutor (max 4-8 thread)
         processed_files = []
-        max_workers = min(8, max(1, len(user_images)))
+        max_workers = min(8, max(1, len(user_image_data)))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(_process_single_image, (idx, img)) for idx, img in enumerate(user_images)]
+            futures = [executor.submit(_process_single_image, item) for item in user_image_data]
             for future in as_completed(futures):
                 res = future.result()
                 if res:

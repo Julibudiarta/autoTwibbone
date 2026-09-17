@@ -143,18 +143,54 @@
   // Elemen preview thumbnail
   let twibbonThumbEl = null;
 
+  const HEIC_EXTS = ['heic', 'heif', 'heics', 'heifs'];
+
+  function isHeicFile(file) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    return HEIC_EXTS.includes(ext) || (file.type && file.type.toLowerCase().includes('heic'));
+  }
+
+  function ensureThumbEl() {
+    if (!twibbonThumbEl) {
+      twibbonThumbEl = document.createElement('img');
+      twibbonThumbEl.className = 'w-20 h-20 object-contain rounded-xl border-2 border-white shadow-md';
+      twibbonThumbEl.alt = 'Preview twibbon';
+      twibbonPreview.insertBefore(twibbonThumbEl, twibbonPreview.firstChild);
+    }
+  }
+
   function showTwibbonThumbnail(file) {
-    // Tampilkan thumbnail gambar pakai FileReader (100% client-side)
+    // Browser tidak punya decoder HEIC — tampilkan placeholder icon agar tidak crash
+    if (isHeicFile(file)) {
+      ensureThumbEl();
+      twibbonThumbEl.src = '';
+      twibbonThumbEl.style.display = 'none';
+      // Tampilkan badge HEIC sebagai pengganti thumbnail
+      let heicBadge = twibbonPreview.querySelector('.heic-badge');
+      if (!heicBadge) {
+        heicBadge = document.createElement('div');
+        heicBadge.className = 'heic-badge w-20 h-20 rounded-xl border-2 border-white shadow-md flex items-center justify-center text-center text-xs font-bold';
+        heicBadge.style.cssText = 'background:var(--plum); color:var(--marigold); flex-shrink:0;';
+        heicBadge.textContent = '📷 HEIC';
+        twibbonPreview.insertBefore(heicBadge, twibbonPreview.firstChild);
+      }
+      heicBadge.style.display = 'flex';
+      return;
+    }
+
+    // Format lain: baca dengan FileReader seperti biasa
+    const existing = twibbonPreview.querySelector('.heic-badge');
+    if (existing) existing.style.display = 'none';
+
     const reader = new FileReader();
     reader.onload = (e) => {
-      if (!twibbonThumbEl) {
-        twibbonThumbEl = document.createElement('img');
-        twibbonThumbEl.className = 'w-20 h-20 object-contain rounded-xl border-2 border-white shadow-md';
-        twibbonThumbEl.alt = 'Preview twibbon';
-        // Sisipkan sebelum twibbonName
-        twibbonPreview.insertBefore(twibbonThumbEl, twibbonPreview.firstChild);
-      }
+      ensureThumbEl();
+      twibbonThumbEl.style.display = '';
       twibbonThumbEl.src = e.target.result;
+    };
+    reader.onerror = () => {
+      // Gagal baca — sembunyikan saja, jangan crash
+      if (twibbonThumbEl) twibbonThumbEl.style.display = 'none';
     };
     reader.readAsDataURL(file);
   }
@@ -212,6 +248,15 @@
     }
     thumbGrid.innerHTML = '';
     files.slice(0, 6).forEach((f) => {
+      if (isHeicFile(f)) {
+        // HEIC: browser tidak bisa decode — tampilkan badge teks
+        const badge = document.createElement('div');
+        badge.className = 'w-12 h-12 rounded-lg border-2 border-white shadow flex items-center justify-center text-center';
+        badge.style.cssText = 'background:var(--plum); color:var(--marigold); font-size:9px; font-weight:700; flex-shrink:0;';
+        badge.textContent = '📷 HEIC';
+        thumbGrid.appendChild(badge);
+        return;
+      }
       const reader = new FileReader();
       reader.onload = (ev) => {
         const img = document.createElement('img');
@@ -219,6 +264,14 @@
         img.className = 'w-12 h-12 object-cover rounded-lg border-2 border-white shadow';
         img.alt = f.name;
         thumbGrid.appendChild(img);
+      };
+      reader.onerror = () => {
+        // Gagal baca — tampilkan placeholder
+        const badge = document.createElement('div');
+        badge.className = 'w-12 h-12 rounded-lg border-2 border-white shadow flex items-center justify-center';
+        badge.style.cssText = 'background:var(--paper-dim); color:var(--ink-muted); font-size:18px;';
+        badge.textContent = '🖼';
+        thumbGrid.appendChild(badge);
       };
       reader.readAsDataURL(f);
     });
